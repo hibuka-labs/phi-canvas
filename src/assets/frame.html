@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="canvas-token" content="{{TOKEN}}">
+  <meta name="canvas-seq" content="{{SEQ}}">
+  <title>设计画布 · {{TITLE}}</title>
+  <link rel="stylesheet" href="/assets/components.css">
+</head>
+<body>
+  <div class="header">
+    <h1>设计画布</h1>
+    <div class="status" id="conn-status">已连接</div>
+  </div>
+
+  <div class="main">
+    <div id="canvas-content">
+      <h2 class="screen-title">{{TITLE}}</h2>
+      {{SUBTITLE}}
+      <div class="section body-region">{{BODY}}</div>
+      {{OPTIONS}}
+    </div>
+  </div>
+
+  <div class="indicator-bar">
+    <span id="indicator-text">{{INDICATOR}}</span>
+  </div>
+
+  <script src="/assets/helper.js"></script>
+</body>
+</html>
