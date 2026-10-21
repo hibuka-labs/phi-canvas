@@ -297,7 +297,7 @@ impl Canvas {
     }
 
     /// Store a screen and make it the current view.
-    pub async fn push(&self, env: ScreenEnvelope) -> Result<PushReceipt, CanvasError> {
+    pub async fn push(&self, mut env: ScreenEnvelope) -> Result<PushReceipt, CanvasError> {
         let receipt = {
             let mut state = self.inner.state.write().unwrap();
             if state.closed.is_some() {
@@ -305,7 +305,7 @@ impl Canvas {
             }
             let seq = state.next_seq;
             state.next_seq += 1;
-            self.inner.store.save_screen(seq, &env)?;
+            self.inner.store.save_screen(seq, &mut env)?;
             let receipt = PushReceipt {
                 screen: seq,
                 url: self.inner.url.clone(),
@@ -354,9 +354,14 @@ fn router(inner: Arc<Inner>) -> Router {
     Router::new()
         .route("/", get(index))
         .route("/screens/{seq}", get(screen))
+        .route("/screens/{seq}/reference", get(screen_reference))
+        .route("/compare", get(compare_default))
+        .route("/compare/{a}/{b}", get(compare_pair))
+        .route("/compare/{a}/{b}/{mode}", get(compare_triple))
         .route("/api/poll", get(poll))
         .route("/assets/components.css", get(stylesheet))
         .route("/assets/helper.js", get(helper))
+        .route("/assets/compare.js", get(compare_script))
         .route("/events", post(post_event))
         .layer(middleware::from_fn_with_state(inner.clone(), guard))
         .with_state(inner)
@@ -435,7 +440,10 @@ fn render_current(inner: &Inner) -> String {
         .current
         .and_then(|seq| state.screens.get(&seq).map(|env| (seq, env)))
     {
-        Some((seq, env)) => assets::render_screen(env, seq, inner.token.as_str()),
+        Some((seq, env)) => {
+            let versions = version_entries(&state);
+            assets::render_screen(env, seq, inner.token.as_str(), &versions)
+        }
         None => assets::render_notice(
             "等待第一屏",
             "agent 推送方案后会自动出现在这里。",
@@ -445,6 +453,21 @@ fn render_current(inner: &Inner) -> String {
     }
 }
 
+/// Design screens so far, ascending — the version rail and the compare
+/// pickers (gate 2 ③). Interstitial screens are left out: the history the
+/// user scrolls is the design, not the pauses between it.
+fn version_entries(state: &CanvasState) -> Vec<assets::VersionEntry> {
+    state
+        .screens
+        .iter()
+        .filter(|(_, env)| !env.interstitial)
+        .map(|(seq, env)| assets::VersionEntry {
+            seq: *seq,
+            title: env.title.clone(),
+        })
+        .collect()
+}
+
 async fn index(State(inner): State<Arc<Inner>>) -> Response {
     Html(render_current(&inner)).into_response()
 }
@@ -452,8 +475,99 @@ async fn index(State(inner): State<Arc<Inner>>) -> Response {
 async fn screen(State(inner): State<Arc<Inner>>, Path(seq): Path<u64>) -> Response {
     let state = inner.state.read().unwrap();
     match state.screens.get(&seq) {
-        Some(env) => Html(assets::render_screen(env, seq, inner.token.as_str())).into_response(),
+        Some(env) => {
+            let versions = version_entries(&state);
+            Html(assets::render_screen(
+                env,
+                seq,
+                inner.token.as_str(),
+                &versions,
+            ))
+            .into_response()
+        }
         None => (StatusCode::NOT_FOUND, "unknown screen").into_response(),
+    }
+}
+
+/// Compare two versions: pickers over the history, side by side or wiped.
+/// Read-only by construction — this page has no token and cannot post events,
+/// because comparing is looking, not picking.
+///
+/// The pair and the layout are path segments, not query parameters: the M4
+/// guard rejects every query string outright (that is how the session token
+/// is kept out of URLs), so nothing here may be passed as one.
+async fn compare_default(State(inner): State<Arc<Inner>>) -> Response {
+    compare_page(&inner, None, None, assets::CompareMode::SideBySide)
+}
+
+async fn compare_pair(State(inner): State<Arc<Inner>>, Path((a, b)): Path<(u64, u64)>) -> Response {
+    compare_page(&inner, Some(a), Some(b), assets::CompareMode::SideBySide)
+}
+
+async fn compare_triple(
+    State(inner): State<Arc<Inner>>,
+    Path((a, b, mode)): Path<(u64, u64, String)>,
+) -> Response {
+    let mode = match mode.as_str() {
+        "split" => assets::CompareMode::SideBySide,
+        "slide" => assets::CompareMode::Wipe,
+        _ => return (StatusCode::NOT_FOUND, "unknown compare mode").into_response(),
+    };
+    compare_page(&inner, Some(a), Some(b), mode)
+}
+
+fn compare_page(
+    inner: &Inner,
+    wanted_before: Option<u64>,
+    wanted_after: Option<u64>,
+    mode: assets::CompareMode,
+) -> Response {
+    let state = inner.state.read().unwrap();
+    let versions = version_entries(&state);
+    if versions.len() < 2 {
+        return Html(assets::render_notice(
+            "还没有可对比的版本",
+            "至少推两屏设计之后，这里才能并排或拖滑块。",
+            inner.token.as_str(),
+            0,
+        ))
+        .into_response();
+    }
+
+    // Defaults are the two most recent versions: the pair the user came to
+    // compare is nearly always "just now" against "the one before it".
+    let fallback_before = versions[versions.len() - 2].seq;
+    let fallback_after = versions[versions.len() - 1].seq;
+    let known = |wanted: Option<u64>, fallback: u64| -> u64 {
+        wanted
+            .filter(|seq| versions.iter().any(|version| version.seq == *seq))
+            .unwrap_or(fallback)
+    };
+    let before_seq = known(wanted_before, fallback_before);
+    let after_seq = known(wanted_after, fallback_after);
+
+    let (Some(before), Some(after)) = (
+        state.screens.get(&before_seq),
+        state.screens.get(&after_seq),
+    ) else {
+        return (StatusCode::NOT_FOUND, "unknown screen").into_response();
+    };
+    Html(assets::render_compare(
+        (before_seq, before),
+        (after_seq, after),
+        &versions,
+        mode,
+    ))
+    .into_response()
+}
+
+/// The reference image copied beside a screen (gate 2 ④). Only bytes the host
+/// already read off disk are served here — the page never names a path of its
+/// own, so this route cannot be used to walk the filesystem.
+async fn screen_reference(State(inner): State<Arc<Inner>>, Path(seq): Path<u64>) -> Response {
+    match inner.store.read_reference(seq) {
+        Some(bytes) => ([(axum::http::header::CONTENT_TYPE, "image/png")], bytes).into_response(),
+        None => (StatusCode::NOT_FOUND, "no reference image").into_response(),
     }
 }
 
@@ -491,6 +605,14 @@ async fn helper() -> Response {
     (
         [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
         assets::HELPER_JS,
+    )
+        .into_response()
+}
+
+async fn compare_script() -> Response {
+    (
+        [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
+        assets::COMPARE_JS,
     )
         .into_response()
 }

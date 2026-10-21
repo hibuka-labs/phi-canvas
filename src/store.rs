@@ -72,13 +72,40 @@ impl CanvasStore {
     }
 
     /// Persist one screen as an HTML fragment plus sidecar metadata.
-    pub fn save_screen(&self, seq: u64, env: &ScreenEnvelope) -> Result<(), StoreError> {
+    ///
+    /// Takes `&mut` because a reference that names a file is resolved here:
+    /// the bytes are copied beside the screen and `reference.resolved` is set
+    /// to the route that serves them, so neither the page nor a later rebind
+    /// goes near the user's disk. A named file that cannot be read is an
+    /// error, not a silent drop — a reference the user asked for must not
+    /// quietly disappear from the screen.
+    pub fn save_screen(&self, seq: u64, env: &mut ScreenEnvelope) -> Result<(), StoreError> {
+        if let Some(reference) = env.reference.as_mut() {
+            reference.resolved = if page_loads_src(&reference.src) {
+                Some(reference.src.clone())
+            } else {
+                let bytes = read_file(Path::new(&reference.src))?;
+                write_file(&self.reference_path(seq), &bytes)?;
+                Some(format!("/screens/{seq}/reference"))
+            };
+        }
+
         write_file(&self.fragment_path(seq), env.body_html.as_bytes())?;
 
         let mut meta = env.clone();
         meta.body_html = String::new();
         let body = serde_json::to_vec(&meta).map_err(|e| StoreError::Serialize(e.to_string()))?;
         write_file(&self.meta_path(seq), &body)
+    }
+
+    /// The copied reference image for one screen.
+    pub fn reference_path(&self, seq: u64) -> PathBuf {
+        self.root.join("screens").join(format!("{seq:04}.ref.png"))
+    }
+
+    /// Read the copied reference image, if one was stored for this screen.
+    pub fn read_reference(&self, seq: u64) -> Option<Vec<u8>> {
+        read_file(&self.reference_path(seq)).ok()
     }
 
     /// Reassemble a saved screen (metadata + fragment).
@@ -187,4 +214,13 @@ fn read_file(path: &Path) -> Result<Vec<u8>, StoreError> {
         path: path.to_path_buf(),
         source,
     })
+}
+
+/// Whether the page can load this reference `src` on its own.
+///
+/// Everything else is a filesystem path the host reads. The canvas is served
+/// from `127.0.0.1` and a browser may not reach at the user's disk, so a local
+/// file has to be copied into the store and served from there instead.
+fn page_loads_src(src: &str) -> bool {
+    src.starts_with("data:") || src.starts_with("http://") || src.starts_with("https://")
 }

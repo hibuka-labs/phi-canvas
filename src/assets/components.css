@@ -134,6 +134,224 @@ body {
 }
 .section { margin-bottom: 1.75rem; }
 .section:last-child { margin-bottom: 0; }
+
+/* ===== reference beside the candidates (参考物贴片) =====
+   A screen without a reference is a plain block — the wrapper only becomes a
+   row when it actually holds one, so nothing about the no-reference layout
+   changes. */
+.stage { display: block; }
+.stage:has(> .reference) {
+  display: flex;
+  gap: 1.25rem;
+  align-items: flex-start;
+  margin-bottom: 1.75rem;
+}
+.stage > .reference {
+  flex: 0 0 clamp(200px, 32%, 420px);
+  margin: 0;
+  min-width: 0;
+}
+.stage > .body-region { flex: 1 1 auto; min-width: 0; margin-bottom: 0; }
+.reference img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-secondary);
+}
+.reference figcaption {
+  margin-top: 0.55rem;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+@media (max-width: 820px) {
+  .stage:has(> .reference) { flex-direction: column; }
+  .stage > .reference { flex: 1 1 auto; width: 100%; }
+}
+
+/* ===== version rail and compare (版本对比) =====
+   The rail is the design history — interstitial screens never make it in.
+   A one-version session gets no rail: history of one is just the present. */
+.versions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1.5rem;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  flex-shrink: 0;
+}
+.versions-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  flex-shrink: 0;
+}
+.versions .version {
+  flex-shrink: 0;
+  max-width: 15rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0.25rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  text-decoration: none;
+}
+.versions .version:hover { border-color: var(--border-strong); color: var(--text-primary); }
+.versions .version.current {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+.versions-compare {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--accent);
+  text-decoration: none;
+  padding: 0.25rem 0.65rem;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+}
+
+.compare-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  padding: 0.65rem 1.5rem;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
+.compare-pick {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
+.compare-pick select {
+  max-width: 16rem;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 0.82rem;
+}
+.compare-modes { display: flex; gap: 0.35rem; margin-left: auto; }
+.compare-modes .mode {
+  padding: 0.3rem 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  text-decoration: none;
+}
+.compare-modes .mode.current {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+.status .back { color: var(--text-secondary); text-decoration: none; }
+.status .back:hover { color: var(--accent); }
+
+.compare {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 1.75rem;
+}
+.compare.split {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1.25rem;
+  align-items: start;
+}
+.compare .pane {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-secondary);
+  overflow: hidden;
+}
+.pane-head,
+.wipe-head {
+  padding: 0.55rem 0.85rem;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.compare .pane .body-region { padding: 1rem 0.85rem; margin-bottom: 0; }
+
+/* Slider: both bodies share one grid cell, so the stack is as tall as the
+   taller version, and the older one is clipped to the left of the handle. */
+.wipe-heads {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1.25rem;
+  margin-bottom: 0.65rem;
+}
+.wipe-stack {
+  display: grid;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.wipe-stack > * { grid-area: 1 / 1; min-width: 0; }
+.wipe-base { background: var(--bg-secondary); padding: 1rem 0.85rem; margin-bottom: 0; }
+.wipe-cover {
+  background: var(--bg-primary);
+  padding: 1rem 0.85rem;
+  margin-bottom: 0;
+  clip-path: inset(0 calc(100% - var(--wipe, 50%)) 0 0);
+}
+.wipe-range {
+  width: 100%;
+  margin-top: 0.85rem;
+  accent-color: var(--accent);
+}
+
+.changes {
+  max-width: 1200px;
+  margin: 0 auto 1.25rem;
+  padding: 0.85rem 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-secondary);
+}
+.changes summary {
+  cursor: pointer;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.changes ul {
+  margin: 0.65rem 0 0.25rem 1.15rem;
+  font-size: 0.84rem;
+  color: var(--text-secondary);
+}
+.changes li { margin-bottom: 0.25rem; }
+
+@media (max-width: 820px) {
+  .compare.split { grid-template-columns: minmax(0, 1fr); }
+  .wipe-heads { grid-template-columns: minmax(0, 1fr); gap: 0.25rem; }
+}
+
 .label {
   font-size: 0.7rem;
   font-weight: 600;
@@ -351,3 +569,810 @@ body {
 }
 .notice h2 { font-size: 1.25rem; margin-bottom: 0.6rem; }
 .notice p { color: var(--text-secondary); font-size: 0.92rem; }
+
+/* ===== screen spec mocks (m-*) =====
+ *
+ * Host-rendered output of `spec_render`. Class names are the closed mock
+ * vocabulary: structure comes from `m-*`, appearance from the `--m-*` theme
+ * tokens a variant declares, and finish level from `.fidelity-*`.
+ *
+ *   .fidelity-wireframe  greyscale structure only (theme colors ignored)
+ *   .fidelity-color      theme color tokens as flat blocks
+ *   .fidelity-texture    color tokens + frost / elevation / edge / glow knobs
+ *
+ * There is no radius knob, on purpose: it was the property that drifted when
+ * nobody asked. Same for any other paint — it either is a token here or it
+ * does not exist.
+ */
+.m-screen { display: flex; flex-direction: column; gap: 1.1rem; }
+
+.m-variants {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 1.1rem;
+}
+
+.m-variant {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.85rem;
+  border: 1px solid var(--m-border, var(--border));
+  border-radius: var(--radius);
+  background: var(--m-bg, var(--bg-secondary));
+  color: var(--m-text, var(--text-primary));
+  overflow: hidden;
+}
+.m-variant[data-choice] { cursor: pointer; }
+.m-variant[data-choice]:hover { border-color: var(--accent); }
+.m-variant.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+/*
+ * Wide-form cards (a tree with no `phone_shell`) take the full row: a PC-web
+ * mock squeezed into a portrait column reads like a phone mock. Phone mocks
+ * keep the side-by-side rail above — the form factor is the model's call.
+ */
+.m-variant-wide { grid-column: 1 / -1; }
+.m-variant-cap {
+  font-size: 0.78rem;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  color: var(--m-text-bright, var(--text-primary));
+}
+.m-notice {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  border-left: 2px solid var(--border-strong);
+  padding-left: 0.75rem;
+}
+
+/* root mock nodes fill the card so nested percentages have a definite box */
+.m-variant > .m-frame,
+.m-variant > .m-cols,
+.m-variant > .m-rows,
+.m-variant > .m-stack,
+.m-variant > .m-box,
+.m-variant > .m-viz,
+.m-variant > .m-area,
+.m-variant > .m-phone,
+.m-variant > .m-table { flex: 1 1 auto; min-height: 190px; }
+
+/* ---- structural nodes ---- */
+.m-frame {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--m-border, var(--border));
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--m-panel, var(--bg-secondary));
+}
+.m-frame-bar {
+  display: flex;
+  gap: 0.3rem;
+  padding: 0.45rem 0.7rem;
+  background: color-mix(in srgb, var(--m-text, var(--text-tertiary)) 12%, transparent);
+}
+.m-frame-bar i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--m-text, var(--text-tertiary)) 38%, transparent);
+}
+.m-frame-hd {
+  padding: 0.5rem 0.85rem;
+  font-size: 0.78rem;
+  font-weight: 650;
+  color: var(--m-text-bright, var(--text-primary));
+  border-bottom: 1px solid var(--m-border, var(--border));
+}
+.m-frame-bd {
+  padding: 0.85rem;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.m-cols, .m-rows { display: grid; gap: 0.65rem; }
+.m-cols { grid-template-columns: var(--ratio, none); }
+.m-rows { grid-template-rows: var(--ratio, none); }
+.m-stack {
+  display: grid;
+  gap: 0.65rem;
+  grid-template-rows: repeat(var(--rows, 1), minmax(0, 1fr));
+}
+
+.m-box {
+  width: var(--w, auto);
+  height: var(--h, auto);
+  min-height: 2.4rem;
+  border: 1px solid var(--m-border, var(--border));
+  border-radius: 6px;
+  background: var(--m-panel, var(--bg-secondary));
+  padding: 0.5rem 0.7rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  font-size: 0.76rem;
+  color: var(--m-text, var(--text-secondary));
+}
+
+.m-nav {
+  display: flex;
+  gap: 1.15rem;
+  padding: 0.65rem 0.95rem;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--m-accent, var(--accent)) 82%, transparent);
+  color: var(--m-text-bright, #fff);
+  font-size: 0.82rem;
+}
+.m-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  padding: 0.85rem;
+  border-radius: 6px;
+  min-width: 130px;
+  background: var(--m-panel, var(--bg-tertiary));
+  font-size: 0.82rem;
+  color: var(--m-text, var(--text-secondary));
+}
+
+.m-input {
+  padding: 0.55rem 0.75rem;
+  border-radius: 6px;
+  border: 1px solid var(--m-border, var(--border));
+  background: var(--m-bg, var(--bg-primary));
+  color: var(--m-text, var(--text-tertiary));
+  font-size: 0.82rem;
+}
+.m-button {
+  padding: 0.55rem 1.05rem;
+  border-radius: 6px;
+  background: var(--m-accent, var(--accent));
+  color: var(--m-text-bright, #fff);
+  font-size: 0.84rem;
+  text-align: center;
+}
+
+.m-swatches { display: flex; gap: 0.45rem; flex-wrap: wrap; }
+.m-chip {
+  width: 1.65rem;
+  height: 1.65rem;
+  border-radius: 5px;
+  border: 1px solid var(--m-border, var(--border));
+  background: var(--chip, var(--m-panel, var(--bg-tertiary)));
+}
+
+.m-text {
+  font-size: 0.78rem;
+  color: var(--m-text, var(--text-secondary));
+}
+.m-ph {
+  flex: 1;
+  min-height: 2.6rem;
+  border: 1.5px dashed var(--m-border, var(--border-strong));
+  border-radius: 6px;
+  display: grid;
+  place-items: center;
+  text-align: center;
+  padding: 0.85rem;
+  font-size: 0.78rem;
+  color: var(--m-text, var(--text-tertiary));
+}
+
+/* ---- data widgets ---- */
+.m-kpi {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.75rem 0.9rem;
+  border-radius: 8px;
+  border: 1px solid var(--m-border, var(--border));
+  background: var(--m-panel, var(--bg-secondary));
+}
+.m-kpi-l { font-size: 0.72rem; color: var(--m-text, var(--text-tertiary)); }
+.m-kpi-v {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--m-text-bright, var(--text-primary));
+  line-height: 1.15;
+}
+.m-kpi-d { font-size: 0.72rem; color: var(--m-accent2, var(--success)); }
+
+.m-hero {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  font-size: clamp(1.8rem, 6vw, 3.2rem);
+  font-weight: 750;
+  letter-spacing: -0.02em;
+  color: var(--m-text-bright, var(--text-primary));
+  text-align: center;
+}
+
+.m-spark {
+  height: 34px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--m-accent, var(--accent)) 78%, transparent);
+}
+.m-spark-up { clip-path: polygon(0 82%, 18% 64%, 36% 72%, 55% 38%, 74% 46%, 100% 8%, 100% 100%, 0 100%); }
+.m-spark-down { clip-path: polygon(0 16%, 20% 32%, 40% 26%, 62% 58%, 82% 52%, 100% 86%, 100% 100%, 0 100%); }
+.m-spark-flat { clip-path: polygon(0 50%, 100% 44%, 100% 100%, 0 100%); }
+
+.m-ring {
+  position: relative;
+  width: 74px;
+  height: 74px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: conic-gradient(
+    var(--m-accent, var(--accent)) calc(var(--pct, 0) * 1%),
+    color-mix(in srgb, var(--m-border, var(--border)) 70%, transparent) 0
+  );
+}
+.m-ring::before {
+  content: "";
+  position: absolute;
+  inset: 13%;
+  border-radius: 50%;
+  background: var(--m-panel, var(--bg-secondary));
+}
+.m-ring span {
+  position: relative;
+  font-size: 0.82rem;
+  font-weight: 650;
+  color: var(--m-text-bright, var(--text-primary));
+}
+
+.m-bars { display: flex; flex-direction: column; gap: 0.45rem; }
+.m-bar {
+  position: relative;
+  height: 1.55rem;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--m-border, var(--border)) 45%, transparent);
+  overflow: hidden;
+}
+.m-bar::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--w, 100%);
+  background: color-mix(in srgb, var(--m-accent, var(--accent)) 68%, transparent);
+}
+.m-bar span {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  height: 100%;
+  padding: 0 0.6rem;
+  font-size: 0.74rem;
+  color: var(--m-text-bright, var(--text-primary));
+}
+
+.m-area {
+  position: relative;
+  border-radius: 8px;
+  border: 1px solid var(--m-border, var(--border));
+  background: var(--m-panel, var(--bg-secondary));
+  overflow: hidden;
+  display: flex;
+  align-items: flex-end;
+}
+.m-area::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, var(--m-accent, var(--accent)) 32%, transparent);
+  clip-path: polygon(0 74%, 16% 58%, 32% 66%, 48% 38%, 64% 46%, 82% 22%, 100% 30%, 100% 100%, 0 100%);
+}
+.m-area span {
+  position: relative;
+  z-index: 1;
+  padding: 0.55rem 0.75rem;
+  font-size: 0.74rem;
+  color: var(--m-text, var(--text-secondary));
+}
+
+.m-viz {
+  position: relative;
+  border-radius: 8px;
+  border: 1px solid var(--m-border, var(--border));
+  background: var(--m-panel, var(--bg-secondary));
+  overflow: hidden;
+  display: flex;
+  align-items: flex-end;
+}
+.m-viz::before {
+  content: "";
+  position: absolute;
+  inset: 12% 10% 30% 10%;
+  background: color-mix(in srgb, var(--m-accent, var(--accent)) 38%, transparent);
+}
+.m-viz-map::before { clip-path: polygon(12% 18%, 46% 8%, 78% 22%, 92% 52%, 70% 88%, 32% 92%, 6% 58%); }
+.m-viz-funnel::before { clip-path: polygon(6% 10%, 94% 10%, 74% 50%, 86% 50%, 50% 94%, 14% 50%, 26% 50%); }
+.m-viz-graph::before {
+  clip-path: none;
+  background:
+    radial-gradient(circle at 24% 34%, var(--m-accent, var(--accent)) 12%, transparent 13%),
+    radial-gradient(circle at 62% 22%, var(--m-accent, var(--accent)) 10%, transparent 11%),
+    radial-gradient(circle at 74% 62%, var(--m-accent2, var(--accent)) 11%, transparent 12%),
+    radial-gradient(circle at 36% 72%, var(--m-accent, var(--accent)) 10%, transparent 11%),
+    linear-gradient(115deg, transparent 42%, color-mix(in srgb, var(--m-border, var(--border)) 80%, transparent) 43%, transparent 44%);
+}
+.m-viz-area::before {
+  clip-path: polygon(0 82%, 20% 58%, 40% 68%, 60% 34%, 80% 44%, 100% 16%, 100% 100%, 0 100%);
+}
+.m-viz span {
+  position: relative;
+  z-index: 1;
+  padding: 0.55rem 0.75rem;
+  font-size: 0.74rem;
+  color: var(--m-text, var(--text-secondary));
+}
+
+/* ---- device & window chrome ----
+ * A form factor is recognisable by its silhouette, so the device chrome is
+ * drawn here and never sent as a node: the model gives the shell a body. */
+.m-phone {
+  width: min(100%, 250px);
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  padding: 0.55rem;
+  border: 1px solid var(--m-border, var(--border-strong));
+  border-radius: 22px;
+  background: var(--m-panel, var(--bg-secondary));
+  /* Content that cannot fit is clipped at the device edge, not painted past
+   * it — a mock that overflows its shell should look wrong, not look wide. */
+  overflow: hidden;
+}
+.m-phone-status {
+  height: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 0.55rem;
+}
+.m-phone-status::before {
+  content: "";
+  width: 14px;
+  height: 5px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--m-text, var(--text-tertiary)) 55%, transparent);
+}
+.m-phone-status::after {
+  content: "";
+  width: 18px;
+  height: 8px;
+  border-radius: 2px;
+  border: 1px solid color-mix(in srgb, var(--m-text, var(--text-tertiary)) 55%, transparent);
+}
+.m-phone-bd {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  min-height: 170px;
+}
+.m-phone-home {
+  width: 72px;
+  height: 4px;
+  border-radius: 2px;
+  margin: 0.15rem auto 0.1rem;
+  background: color-mix(in srgb, var(--m-text, var(--text-tertiary)) 45%, transparent);
+}
+
+.m-topbar {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.55rem 0.75rem;
+  border-bottom: 1px solid var(--m-border, var(--border));
+}
+.m-topbar-back {
+  justify-self: start;
+  width: 7px;
+  height: 7px;
+  border-left: 1.5px solid var(--m-text, var(--text-secondary));
+  border-bottom: 1.5px solid var(--m-text, var(--text-secondary));
+  transform: rotate(45deg);
+}
+.m-topbar-t {
+  justify-self: center;
+  font-size: 0.82rem;
+  font-weight: 650;
+  color: var(--m-text-bright, var(--text-primary));
+}
+.m-topbar-a {
+  justify-self: end;
+  font-size: 0.78rem;
+  color: var(--m-accent, var(--accent));
+}
+
+.m-tabbar {
+  display: flex;
+  gap: 0.3rem;
+  padding: 0.5rem 0.45rem;
+  border-top: 1px solid var(--m-border, var(--border));
+}
+.m-tab {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.28rem;
+  padding: 0.35rem 0.2rem;
+  border-radius: 6px;
+  font-size: 0.7rem;
+  color: var(--m-text, var(--text-tertiary));
+}
+.m-tab i {
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  border: 1.5px solid currentColor;
+}
+.m-tab-on {
+  background: var(--m-accent, var(--accent));
+  color: var(--m-text-bright, #fff);
+}
+
+.m-toolbar {
+  display: flex;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+  padding: 0.55rem 0.75rem;
+  border-bottom: 1px solid var(--m-border, var(--border));
+}
+.m-tool {
+  padding: 0.32rem 0.7rem;
+  border: 1px solid var(--m-border, var(--border));
+  border-radius: 5px;
+  background: var(--m-panel, var(--bg-secondary));
+  font-size: 0.75rem;
+  color: var(--m-text, var(--text-secondary));
+}
+
+.m-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  padding: 0.85rem;
+  border: 1px solid var(--m-border, var(--border));
+  border-radius: 10px;
+  background: var(--m-panel, var(--bg-secondary));
+}
+.m-dialog-hd {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--m-text-bright, var(--text-primary));
+}
+.m-dialog-bd {
+  font-size: 0.78rem;
+  color: var(--m-text, var(--text-secondary));
+}
+.m-dialog-acts {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.45rem;
+}
+.m-dialog-act {
+  padding: 0.4rem 0.85rem;
+  border: 1px solid var(--m-border, var(--border));
+  border-radius: 6px;
+  font-size: 0.78rem;
+  color: var(--m-text, var(--text-secondary));
+}
+.m-dialog-key {
+  background: var(--m-accent, var(--accent));
+  border-color: transparent;
+  color: var(--m-text-bright, #fff);
+}
+
+/* ---- high-frequency controls ---- */
+.m-row {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--m-border, var(--border));
+  border-radius: 6px;
+  background: var(--m-panel, var(--bg-secondary));
+}
+.m-row-av {
+  width: 26px;
+  height: 26px;
+  flex: none;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--m-accent, var(--accent)) 28%, var(--m-panel, var(--bg-tertiary)));
+}
+.m-row-txt {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.12rem;
+  min-width: 0;
+}
+.m-row-t {
+  font-size: 0.8rem;
+  color: var(--m-text-bright, var(--text-primary));
+}
+.m-row-n {
+  font-size: 0.72rem;
+  color: var(--m-text, var(--text-tertiary));
+}
+.m-row-meta {
+  font-size: 0.72rem;
+  color: var(--m-text, var(--text-tertiary));
+}
+.m-row-ch {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-right: 1.5px solid var(--m-text, var(--text-tertiary));
+  border-top: 1.5px solid var(--m-text, var(--text-tertiary));
+  transform: rotate(45deg);
+}
+
+.m-switch {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.65rem;
+  padding: 0.55rem 0.75rem;
+  border: 1px solid var(--m-border, var(--border));
+  border-radius: 6px;
+  background: var(--m-panel, var(--bg-secondary));
+  font-size: 0.78rem;
+  color: var(--m-text, var(--text-secondary));
+  /* A switch in a narrow column is a tile: the label goes on its own line
+   * above the toggle instead of wrapping one CJK character at a time. */
+  container-type: inline-size;
+}
+.m-switch > span {
+  flex: 1;
+  min-width: 0;
+}
+@container (max-width: 110px) {
+  .m-switch > span {
+    flex: 1 0 100%;
+    text-align: center;
+  }
+  .m-switch-t {
+    margin: 0 auto;
+  }
+}
+.m-switch-t {
+  position: relative;
+  width: 34px;
+  height: 18px;
+  flex: none;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--m-text, var(--text-tertiary)) 35%, transparent);
+}
+.m-switch-t::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--m-text-bright, #fff);
+}
+.m-switch-t.m-on { background: var(--m-accent, var(--accent)); }
+.m-switch-t.m-on::before { left: auto; right: 2px; }
+
+.m-segment {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--m-text, var(--text-tertiary)) 14%, transparent);
+}
+.m-seg {
+  flex: 1;
+  text-align: center;
+  padding: 0.38rem 0.55rem;
+  border-radius: 6px;
+  font-size: 0.76rem;
+  color: var(--m-text, var(--text-secondary));
+}
+.m-seg-on {
+  background: var(--m-panel, var(--bg-primary));
+  color: var(--m-text-bright, var(--text-primary));
+  font-weight: 650;
+  box-shadow: 0 1px 3px rgba(10, 12, 20, 0.16);
+}
+
+/* ---- dense content ---- */
+.m-table {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--m-border, var(--border));
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--m-panel, var(--bg-secondary));
+}
+.m-tr {
+  display: flex;
+  gap: 0.55rem;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--m-border, var(--border));
+}
+.m-tr:last-child { border-bottom: 0; }
+.m-tr span {
+  flex: 1 1 0;
+  min-width: 0;
+  font-size: 0.75rem;
+  color: var(--m-text, var(--text-secondary));
+}
+.m-th span {
+  font-weight: 650;
+  color: var(--m-text-bright, var(--text-primary));
+}
+
+.m-tree {
+  display: flex;
+  flex-direction: column;
+  gap: 0.28rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--m-border, var(--border));
+  border-radius: 6px;
+  background: var(--m-panel, var(--bg-secondary));
+}
+.m-tree-i {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding-left: calc(var(--d, 0) * 0.95rem);
+  font-size: 0.78rem;
+  color: var(--m-text, var(--text-secondary));
+}
+.m-tree-i i {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--m-text, var(--text-tertiary)) 45%, transparent);
+}
+
+/* ---- emphasis: "the one accent lands here" ----
+ * Same accent, different node — the whole point of `variants[].emph`. */
+.m-emph {
+  border-color: var(--m-accent, var(--accent));
+  background: color-mix(in srgb, var(--m-accent, var(--accent)) 16%, var(--m-panel, var(--bg-secondary)));
+}
+.m-button.m-emph,
+.m-nav.m-emph {
+  background: var(--m-accent, var(--accent));
+  color: var(--m-text-bright, #fff);
+}
+.m-hero.m-emph,
+.m-text.m-emph { color: var(--m-accent, var(--accent)); background: transparent; border-color: transparent; }
+.m-kpi.m-emph .m-kpi-v { color: var(--m-accent, var(--accent)); }
+.m-spark.m-emph,
+.m-area.m-emph::before,
+.m-viz.m-emph::before { background: var(--m-accent, var(--accent)); }
+.m-ring.m-emph {
+  background: conic-gradient(
+    var(--m-accent, var(--accent)) calc(var(--pct, 0) * 1%),
+    color-mix(in srgb, var(--m-border, var(--border)) 70%, transparent) 0
+  );
+  outline: 2px solid color-mix(in srgb, var(--m-accent, var(--accent)) 55%, transparent);
+}
+
+/* ---- fidelity: wireframe — structure only, no candidate colors ---- */
+.fidelity-wireframe .m-variant {
+  --m-bg: var(--bg-secondary);
+  --m-panel: var(--bg-primary);
+  --m-border: var(--border-strong);
+  --m-text: var(--text-secondary);
+  --m-text-bright: var(--text-primary);
+  --m-accent: var(--border-strong);
+  --m-accent2: var(--border-strong);
+}
+.fidelity-wireframe .m-nav {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+.fidelity-wireframe .m-button {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+.fidelity-wireframe .m-tab-on,
+.fidelity-wireframe .m-dialog-key {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+.fidelity-wireframe .m-emph {
+  background: var(--bg-tertiary);
+  border-color: var(--text-primary);
+}
+.fidelity-wireframe .m-hero.m-emph,
+.fidelity-wireframe .m-text.m-emph,
+.fidelity-wireframe .m-kpi.m-emph .m-kpi-v {
+  color: var(--text-primary);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.fidelity-wireframe .m-spark,
+.fidelity-wireframe .m-bar::before,
+.fidelity-wireframe .m-area::before,
+.fidelity-wireframe .m-viz::before {
+  background: var(--border-strong);
+}
+.fidelity-wireframe .m-ring {
+  background: conic-gradient(var(--border-strong) calc(var(--pct, 0) * 1%), var(--bg-tertiary) 0);
+}
+
+/* ---- fidelity: texture — the four measured knobs bite ---- */
+.fidelity-texture .m-variant {
+  box-shadow:
+    0 calc(var(--m-elevation, 1) * 1px) calc(var(--m-elevation, 1) * 9px) rgba(10, 12, 20, calc(var(--m-elevation, 1) * 0.13)),
+    0 0 calc(var(--m-glow, 0) * 16px) color-mix(in srgb, var(--m-accent, var(--accent)) 40%, transparent);
+  border-color: color-mix(in srgb, var(--m-border, var(--border)) calc(var(--m-edge, 1) * 33%), transparent);
+}
+.fidelity-texture .m-frame,
+.fidelity-texture .m-kpi,
+.fidelity-texture .m-box,
+.fidelity-texture .m-sidebar,
+.fidelity-texture .m-area,
+.fidelity-texture .m-viz,
+.fidelity-texture .m-phone,
+.fidelity-texture .m-dialog,
+.fidelity-texture .m-table {
+  box-shadow: 0 calc(var(--m-elevation, 1) * 1px) calc(var(--m-elevation, 1) * 6px) rgba(10, 12, 20, calc(var(--m-elevation, 1) * 0.11));
+  border-color: color-mix(in srgb, var(--m-border, var(--border)) calc(var(--m-edge, 1) * 33%), transparent);
+}
+/* glass / matte / metal surface families (class lives on the variant card) */
+.fidelity-texture .m-variant.m-surface-matte .m-frame,
+.fidelity-texture .m-variant.m-surface-matte .m-kpi,
+.fidelity-texture .m-variant.m-surface-matte .m-box,
+.fidelity-texture .m-variant.m-surface-matte .m-sidebar,
+.fidelity-texture .m-variant.m-surface-matte .m-area,
+.fidelity-texture .m-variant.m-surface-matte .m-viz,
+.fidelity-texture .m-variant.m-surface-matte .m-phone,
+.fidelity-texture .m-variant.m-surface-matte .m-dialog,
+.fidelity-texture .m-variant.m-surface-matte .m-table {
+  /* matte is the opaque base: no translucency, no blur, no specular sheen */
+  background: var(--m-panel, var(--bg-secondary));
+}
+.fidelity-texture .m-variant.m-surface-glass .m-frame,
+.fidelity-texture .m-variant.m-surface-glass .m-kpi,
+.fidelity-texture .m-variant.m-surface-glass .m-box,
+.fidelity-texture .m-variant.m-surface-glass .m-sidebar,
+.fidelity-texture .m-variant.m-surface-glass .m-area,
+.fidelity-texture .m-variant.m-surface-glass .m-viz,
+.fidelity-texture .m-variant.m-surface-glass .m-phone,
+.fidelity-texture .m-variant.m-surface-glass .m-dialog,
+.fidelity-texture .m-variant.m-surface-glass .m-table {
+  background: color-mix(in srgb, var(--m-panel, var(--bg-secondary)) 58%, transparent);
+  backdrop-filter: blur(calc(var(--m-frost, 1) * 5px));
+  -webkit-backdrop-filter: blur(calc(var(--m-frost, 1) * 5px));
+}
+.fidelity-texture .m-variant.m-surface-metal .m-frame,
+.fidelity-texture .m-variant.m-surface-metal .m-kpi,
+.fidelity-texture .m-variant.m-surface-metal .m-box,
+.fidelity-texture .m-variant.m-surface-metal .m-sidebar,
+.fidelity-texture .m-variant.m-surface-metal .m-phone,
+.fidelity-texture .m-variant.m-surface-metal .m-dialog {
+  background:
+    linear-gradient(160deg,
+      color-mix(in srgb, var(--m-text-bright, #fff) 12%, var(--m-panel, var(--bg-secondary))),
+      var(--m-panel, var(--bg-secondary)) 55%,
+      color-mix(in srgb, #000 16%, var(--m-panel, var(--bg-secondary))));
+}
+
+@media (max-width: 720px) {
+  .m-variants { grid-template-columns: 1fr; }
+}

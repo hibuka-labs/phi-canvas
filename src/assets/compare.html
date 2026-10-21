@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>设计画布 · 版本对比</title>
+  <link rel="stylesheet" href="/assets/components.css">
+</head>
+<body>
+  <div class="header">
+    <h1>设计画布 · 版本对比</h1>
+    <div class="status"><a class="back" href="/">回到当前屏</a></div>
+  </div>
+
+  <div class="compare-bar">
+    <label class="compare-pick">左 <select id="pick-a">{{PICK_A}}</select></label>
+    <label class="compare-pick">右 <select id="pick-b">{{PICK_B}}</select></label>
+    <nav class="compare-modes">{{MODES}}</nav>
+  </div>
+
+  <div class="main">
+    {{DIFF}}
+    {{COMPARE}}
+  </div>
+
+  <div class="indicator-bar">
+    <span id="indicator-text">对比是给人看的 · 选择请回到当前屏</span>
+  </div>
+
+  <script src="/assets/compare.js"></script>
+</body>
+</html>

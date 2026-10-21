@@ -24,6 +24,7 @@ use tokio::sync::Mutex;
 
 use crate::envelope::{EnvelopeError, ScreenEnvelope};
 use crate::server::{Canvas, CanvasConfig, CanvasError, CloseReason};
+use crate::spec::SpecError;
 
 pub const TOOL_OPEN: &str = "canvas_open";
 pub const TOOL_PUSH: &str = "canvas_push";
@@ -31,6 +32,12 @@ pub const TOOL_CLOSE: &str = "canvas_close";
 
 /// The locked `canvas_close` return text (M3).
 pub const TEXT_CLOSED: &str = "canvas: closed";
+
+/// Appended to a `canvas_push` text when the model sent both `screen` and
+/// `body_html`. The spec wins; this note is how the model finds out its markup
+/// was not the thing that got shown. The M3 formats above are unchanged.
+pub const TEXT_SPEC_OVER_HTML: &str =
+    " | note: both screen and body_html given - screen won, send only one";
 
 /// What the host did about showing the URL to the user.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,6 +70,8 @@ pub enum ToolCallError {
     Canvas(#[from] CanvasError),
     #[error(transparent)]
     Envelope(#[from] EnvelopeError),
+    #[error(transparent)]
+    Spec(#[from] SpecError),
 }
 
 struct ToolState {
@@ -155,7 +164,11 @@ impl CanvasTools {
     /// `canvas_push`: parse the M3 envelope and show one screen. Implicitly
     /// opens (binds only — never launches) when no live canvas exists.
     pub async fn push(&self, args: &Value) -> Result<String, ToolCallError> {
-        let env = ScreenEnvelope::parse(args)?;
+        let mut env = ScreenEnvelope::parse(args)?;
+        // Spec screens render host-side into the body slot; `body_html` stays
+        // the escape hatch. When the model sends both, the spec wins and the
+        // tool text says so.
+        let both = env.materialize_screen()?;
         let mut state = self.state.lock().await;
         let live = state.canvas.as_ref().is_some_and(|canvas| is_live(canvas));
         if !live {
@@ -168,11 +181,15 @@ impl CanvasTools {
             .expect("live canvas ensured above")
             .clone();
         let receipt = canvas.push(env).await?;
-        Ok(if receipt.display_only {
+        let mut text = if receipt.display_only {
             text_display_only(&receipt.url, &receipt.title)
         } else {
             text_awaiting_selection(&receipt.url, &receipt.title, receipt.option_count)
-        })
+        };
+        if both {
+            text.push_str(TEXT_SPEC_OVER_HTML);
+        }
+        Ok(text)
     }
 
     /// `canvas_close`: graceful close, idempotent (M1/M3).
@@ -238,11 +255,15 @@ pub fn tool_descriptors() -> Vec<ToolDescriptor> {
             name: TOOL_PUSH,
             description: "Push one design screen to the canvas and wait for the user's pick. \
                 `title` states the question in one line; `options` are the candidates \
-                (`id` echoed back on click, `label` shown); `body_html` is a small HTML \
-                fragment for mockups/comparisons (optionally with `data-choice` attributes \
-                for spatial picks); `options: []` makes it a display-only screen; \
-                `multiselect: true` adds confirm/skip instead of single-select. Opening is \
-                implicit (server only — the browser waits for the user's consent).",
+                (`id` echoed back on click, `label` shown); `options: []` makes it a \
+                display-only screen; `multiselect: true` adds confirm/skip instead of \
+                single-select. Describe the picture with `screen` (structured mock + theme \
+                tokens — preferred) or `body_html` (raw HTML escape hatch), never both. \
+                `reference` pins one PNG beside the candidates when the user pointed at \
+                something to match. Each push is kept as a version the user can look back \
+                at and compare (side by side or a wipe slider) — number it in the title \
+                when you iterate. \
+                Opening is implicit (server only — the browser waits for the user's consent).",
             schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -278,7 +299,55 @@ pub fn tool_descriptors() -> Vec<ToolDescriptor> {
                     },
                     "body_html": {
                         "type": "string",
-                        "description": "Optional HTML fragment (mockups, comparison cards)."
+                        "description": "Escape hatch: a raw HTML fragment (mockups, comparison cards). Send this OR `screen`, not both."
+                    },
+                    "escape": {
+                        "type": "string",
+                        "description": "Only with `body_html`: one or two words naming the shape the vocabulary could not hold ('table', 'phone-frame', 'timeline'). Never rendered — it is the ledger that says what the closed vocabulary is missing, so name the shape, not the screen. With `screen` it is rejected."
+                    },
+                    "reference": {
+                        "type": "object",
+                        "description": "One reference image the candidates are judged against, shown beside them. \
+                            `src` is a filesystem path (the host copies it into the session store) or an \
+                            http(s)/`data:` URI the page loads itself; `caption` is one line naming what it is. \
+                            The source is pluggable — a screenshot, a file the user named, a pasted image — \
+                            the canvas only needs one PNG and a name for where it is.",
+                        "properties": {
+                            "src": {
+                                "type": "string",
+                                "description": "Where the PNG is: a path on disk, or an http(s)/data: URI."
+                            },
+                            "caption": {
+                                "type": "string",
+                                "description": "One line: what this is a reference of."
+                            }
+                        },
+                        "required": ["src"]
+                    },
+                    "screen": {
+                        "type": "object",
+                        "description": "Structured screen (preferred — send it as a real JSON object in the \
+                            arguments, never as a stringified copy). Shape: \
+                            {fidelity: 'wireframe'|'color'|'texture', mock?: <node>, notice?: string, \
+                            variants?: [{id, mock?: <node>, theme?: <tokens>, emph?: [node_id], content?: {node_id: text}}]}. \
+                            `variants[].id` must match an `options[].id`; the shared `mock` is reused \
+                            per variant unless a variant overrides it. Node = {kind, id?, ...} with a \
+                            closed kind set — layout: 'frame'|'cols'|'rows'|'stack'|'box'|'text'|'placeholder'; \
+                            chrome: 'phone_shell'|'topbar'|'nav'|'sidebar'|'tabbar'|'toolbar'|'dialog'; \
+                            controls: 'input'|'button'|'switch'|'segment'|'list_row'|'swatches'; \
+                            data/content: 'kpi'|'hero'|'sparkline'|'ring'|'bars'|'area'|'viz'|'table'|'tree'. \
+                            A kind only takes the fields it declares; a stray field is rejected. \
+                            `viz` takes `form: 'map'|'funnel'|'graph'|'area'`, `sparkline` takes \
+                            `shape: 'up'|'down'|'flat'`, `cols`/`rows` take `ratio` weights (numbers, \
+                            decimals fine: `[1, 5, 0.7]`), `box` takes \
+                            `w`/`h` percentages (number or string, `18` = `18%`; in a `cols`/`rows` band \
+                            the share becomes the child's track), `phone_shell`/`dialog` take a nested `body` node, \
+                            `tabbar`/`segment` take `items` + optional `active` index. \
+                            Theme tokens: bg, panel, border, accent, accent2, text, text_bright; \
+                            texture knobs (fidelity 'texture' only): surface 'glass'|'matte'|'metal', frost 1-3, \
+                            elevation 1-3, edge 1-3, glow 0-2. No CSS and no style fields anywhere — \
+                            structure + tokens only. `fidelity` follows the question being asked: \
+                            layout = wireframe, styling = color, material/finish = texture."
                     },
                     "multiselect": {
                         "type": "boolean",

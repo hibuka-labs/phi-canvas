@@ -334,3 +334,153 @@ async fn assets_include_heartbeat_and_component_classes() {
 
     canvas.shutdown().await;
 }
+
+// ── reference beside the candidates (参考物贴片) ───────────────────────────
+
+fn reference_screen(src: &str, caption: Option<&str>) -> ScreenEnvelope {
+    let mut reference = json!({ "src": src });
+    if let Some(caption) = caption {
+        reference["caption"] = json!(caption);
+    }
+    ScreenEnvelope::parse(&json!({
+        "title": "参考这个方向改，哪个更像？",
+        "options": [
+            { "id": "a", "label": "更接近" },
+            { "id": "b", "label": "差一点" }
+        ],
+        "body_html": "<div class=\"cards\"><div class=\"card\">A</div></div>",
+        "reference": reference
+    }))
+    .unwrap()
+}
+
+#[tokio::test]
+async fn a_reference_renders_beside_the_candidates() {
+    let tmp = tempfile::tempdir().unwrap();
+    let canvas = open_canvas(&tmp).await;
+    let src = "data:image/png;base64,aGVsbG8=";
+    canvas
+        .push(reference_screen(src, Some("正泰首页 · 2026-10")))
+        .await
+        .unwrap();
+
+    let (status, response) = send(canvas.port(), &get(canvas.port(), "/")).await;
+    assert_eq!(status, 200);
+    let body = body_of(&response);
+
+    assert!(
+        body.contains("class=\"reference\""),
+        "reference block present"
+    );
+    assert!(
+        body.contains(&format!("src=\"{src}\"")),
+        "src handed to the page"
+    );
+    assert!(
+        body.contains("<figcaption>正泰首页 · 2026-10</figcaption>"),
+        "caption rendered"
+    );
+    // The reference and the body share a stage row — 「摆在旁边」 is a layout,
+    // not a second page.
+    assert!(body.contains("class=\"stage\""), "stage wrapper present");
+    assert!(
+        body.contains("class=\"cards\""),
+        "candidates still rendered"
+    );
+
+    canvas.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_screen_without_a_reference_has_no_reference_block() {
+    let tmp = tempfile::tempdir().unwrap();
+    let canvas = open_canvas(&tmp).await;
+    canvas.push(options_screen()).await.unwrap();
+
+    let (status, response) = send(canvas.port(), &get(canvas.port(), "/")).await;
+    assert_eq!(status, 200);
+    let body = body_of(&response);
+
+    assert!(
+        !body.contains("class=\"reference\""),
+        "no reference block without a reference"
+    );
+    assert!(body.contains("mock-nav"), "body unaffected");
+
+    canvas.shutdown().await;
+}
+
+#[tokio::test]
+async fn reference_caption_and_src_are_html_escaped() {
+    let tmp = tempfile::tempdir().unwrap();
+    let canvas = open_canvas(&tmp).await;
+    canvas
+        .push(reference_screen(
+            "https://x.test/a\".png",
+            Some("<b>bold</b>"),
+        ))
+        .await
+        .unwrap();
+
+    let (status, response) = send(canvas.port(), &get(canvas.port(), "/")).await;
+    assert_eq!(status, 200);
+    let body = body_of(&response);
+
+    assert!(
+        !body.contains("<b>bold</b>"),
+        "caption must never be raw markup"
+    );
+    assert!(body.contains("&lt;b&gt;bold&lt;/b&gt;"), "escaped caption");
+    assert!(
+        !body.contains("src=\"https://x.test/a\".png\""),
+        "a quote in src must not break out of the attribute"
+    );
+
+    canvas.shutdown().await;
+}
+
+#[tokio::test]
+async fn the_reference_route_serves_the_copied_bytes_and_nothing_else() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let canvas = open_canvas(&tmp).await;
+
+    // A local file: the host copies it, the page loads the route.
+    let png = tmp.path().join("ref.png");
+    std::fs::write(&png, b"\x89PNG-bytes-here").unwrap();
+    canvas
+        .push(reference_screen(png.to_str().unwrap(), None))
+        .await
+        .unwrap();
+
+    let port = canvas.port();
+    let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .expect("connect");
+    stream
+        .write_all(common::get(port, "/screens/1/reference").as_bytes())
+        .await
+        .unwrap();
+    let mut buf = Vec::new();
+    stream.read_to_end(&mut buf).await.unwrap();
+    let head = String::from_utf8_lossy(&buf).into_owned();
+
+    assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+    assert!(
+        head.to_ascii_lowercase()
+            .contains("content-type: image/png"),
+        "served as an image: {head}"
+    );
+    assert!(
+        buf.windows(b"\x89PNG-bytes-here".len())
+            .any(|w| w == b"\x89PNG-bytes-here"),
+        "the copied bytes are what get served"
+    );
+
+    // No copy for that seq → 404, not a walk of the filesystem.
+    let (status, _) = send(port, &common::get(port, "/screens/999/reference")).await;
+    assert_eq!(status, 404);
+
+    canvas.shutdown().await;
+}

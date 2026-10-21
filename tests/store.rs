@@ -61,9 +61,9 @@ fn server_info_persists_all_fields_and_no_token_key() {
 fn screen_is_stored_as_body_fragment_plus_metadata() {
     let tmp = tempfile::tempdir().unwrap();
     let store = CanvasStore::open(tmp.path().join("c")).unwrap();
-    let env = env();
+    let mut env = env();
 
-    store.save_screen(1, &env).unwrap();
+    store.save_screen(1, &mut env).unwrap();
 
     let fragment = std::fs::read_to_string(store.root().join("screens/0001.html")).unwrap();
     assert_eq!(
@@ -86,9 +86,9 @@ fn screen_is_stored_as_body_fragment_plus_metadata() {
 fn screen_roundtrip_restores_full_envelope() {
     let tmp = tempfile::tempdir().unwrap();
     let store = CanvasStore::open(tmp.path().join("c")).unwrap();
-    let env = env();
+    let mut env = env();
 
-    store.save_screen(7, &env).unwrap();
+    store.save_screen(7, &mut env).unwrap();
     let loaded = store.load_screen(7).unwrap();
     assert_eq!(loaded, env);
 }
@@ -99,10 +99,10 @@ fn load_all_screens_replays_saved_screens_in_seq_order() {
     // allowed, a corrupt sidecar is skipped, order is ascending by seq.
     let tmp = tempfile::tempdir().unwrap();
     let store = CanvasStore::open(tmp.path().join("c")).unwrap();
-    let env = env();
+    let mut env = env();
 
-    store.save_screen(1, &env).unwrap();
-    store.save_screen(3, &env).unwrap();
+    store.save_screen(1, &mut env).unwrap();
+    store.save_screen(3, &mut env).unwrap();
     std::fs::write(store.root().join("screens/0002.json"), b"{not json").unwrap();
 
     let loaded = store.load_all_screens();
@@ -194,4 +194,81 @@ fn event_input_rejects_unknown_or_incomplete_shapes() {
             .is_err(),
         "screen is required"
     );
+}
+
+// ── reference image persistence ────────────────────────────────────────────
+
+fn ref_env(src: &str, caption: Option<&str>) -> ScreenEnvelope {
+    let mut reference = serde_json::json!({ "src": src });
+    if let Some(caption) = caption {
+        reference["caption"] = json!(caption);
+    }
+    ScreenEnvelope::parse(&json!({
+        "title": "参考这个方向改，哪个更像？",
+        "options": [{ "id": "a", "label": "更接近" }],
+        "body_html": "<div class=\"mockup\"></div>",
+        "reference": reference
+    }))
+    .unwrap()
+}
+
+#[test]
+fn a_local_reference_is_copied_beside_the_screen_and_resolved_to_a_route() {
+    let tmp = tempfile::tempdir().unwrap();
+    let store = CanvasStore::open(tmp.path().join("canvas")).unwrap();
+
+    let png = tmp.path().join("zhentai.png");
+    std::fs::write(&png, b"\x89PNG-not-really").unwrap();
+
+    let mut env = ref_env(png.to_str().unwrap(), Some("正泰首页"));
+    store.save_screen(3, &mut env).unwrap();
+
+    // The page loads a route, never the user's path.
+    assert_eq!(
+        env.reference.as_ref().unwrap().resolved.as_deref(),
+        Some("/screens/3/reference")
+    );
+    // …and the bytes are in the store, where a rebind will find them.
+    assert_eq!(store.read_reference(3).unwrap(), b"\x89PNG-not-really");
+    // The recorded source is still what the model sent.
+    assert_eq!(env.reference.as_ref().unwrap().src, png.to_str().unwrap());
+
+    // Round trip: the sidecar keeps the resolved URL.
+    let loaded = store.load_screen(3).unwrap();
+    assert_eq!(loaded.reference, env.reference);
+}
+
+#[test]
+fn a_uri_reference_is_handed_to_the_page_verbatim() {
+    let tmp = tempfile::tempdir().unwrap();
+    let store = CanvasStore::open(tmp.path().join("canvas")).unwrap();
+
+    for src in [
+        "https://example.com/zhentai.png",
+        "data:image/png;base64,aGVsbG8=",
+    ] {
+        let mut env = ref_env(src, None);
+        store.save_screen(1, &mut env).unwrap();
+        assert_eq!(
+            env.reference.as_ref().unwrap().resolved.as_deref(),
+            Some(src),
+            "{src} must pass through"
+        );
+        // Nothing copied: the store holds no bytes for a remote reference.
+        assert!(store.read_reference(1).is_none());
+    }
+}
+
+#[test]
+fn a_missing_reference_file_fails_the_save_rather_than_dropping_it() {
+    // A reference the user asked for must not quietly vanish from the screen.
+    let tmp = tempfile::tempdir().unwrap();
+    let store = CanvasStore::open(tmp.path().join("canvas")).unwrap();
+
+    let mut env = ref_env("/no/such/zhentai.png", None);
+    let err = match store.save_screen(1, &mut env) {
+        Ok(()) => panic!("an unreadable reference must fail the save"),
+        Err(err) => err,
+    };
+    assert!(err.to_string().contains("zhentai.png"), "{err}");
 }

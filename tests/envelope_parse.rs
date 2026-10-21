@@ -1,6 +1,6 @@
 //! Acceptance row 1: envelope parsing — title / options / multiselect / missing fields.
 
-use phi_canvas::ScreenEnvelope;
+use phi_canvas::{EnvelopeError, ScreenEnvelope};
 use serde_json::json;
 
 fn full() -> serde_json::Value {
@@ -217,4 +217,316 @@ fn option_id_length_is_capped() {
         "options": [{ "id": "a".repeat(65), "label": "one" }]
     });
     assert!(ScreenEnvelope::parse(&v).is_err());
+}
+
+// ---- `screen` vs `body_html` (gate 2: structured spec + escape hatch) ----
+
+fn spec_args() -> serde_json::Value {
+    json!({
+        "title": "配色方向",
+        "options": [
+            { "id": "deep-blue", "label": "深空蓝" },
+            { "id": "neon-purple", "label": "暗紫霓虹" }
+        ],
+        "screen": {
+            "fidelity": "color",
+            "mock": {
+                "kind": "cols",
+                "children": [
+                    { "kind": "hero", "id": "hero", "text": "128,640" },
+                    { "kind": "button", "id": "cta", "text": "导出" }
+                ]
+            },
+            "variants": [
+                { "id": "deep-blue", "theme": { "bg": "#0A1428" }, "emph": ["hero"] },
+                { "id": "neon-purple", "theme": { "bg": "#12071F" }, "emph": ["cta"] }
+            ]
+        }
+    })
+}
+
+#[test]
+fn screen_alone_materializes_the_body() {
+    let mut env = ScreenEnvelope::parse(&spec_args()).expect("envelope");
+    assert!(env.has_spec());
+    assert!(
+        env.body_html.is_empty(),
+        "body is not authored by the model"
+    );
+
+    let both = env.materialize_screen().expect("render");
+    assert!(!both, "no body_html was given");
+    assert!(env.body_html.contains("m-screen"), "{}", env.body_html);
+    assert!(
+        env.body_html.contains("--m-bg:#0A1428"),
+        "{}",
+        env.body_html
+    );
+    assert!(
+        env.screen.is_some(),
+        "the spec stays on the envelope for the sidecar"
+    );
+}
+
+#[test]
+fn body_html_alone_is_untouched() {
+    let mut env = ScreenEnvelope::parse(&full()).expect("envelope");
+    let before = env.body_html.clone();
+    let both = env.materialize_screen().expect("render");
+    assert!(!both);
+    assert_eq!(env.body_html, before);
+}
+
+#[test]
+fn sending_both_keeps_the_spec_and_reports_it() {
+    // The design contract: the spec wins and the caller says so — the model's
+    // markup is not silently shown, and it is not silently discarded either.
+    let mut v = spec_args();
+    v["body_html"] = json!("<div class=\"cards\">hand written</div>");
+    let mut env = ScreenEnvelope::parse(&v).expect("envelope");
+
+    let both = env.materialize_screen().expect("render");
+    assert!(both, "both were given");
+    assert!(env.body_html.contains("m-screen"), "{}", env.body_html);
+    assert!(
+        !env.body_html.contains("hand written"),
+        "the spec wins over body_html"
+    );
+}
+
+#[test]
+fn variant_ids_must_name_a_real_option() {
+    let mut v = spec_args();
+    v["screen"]["variants"][0]["id"] = json!("deep-blur");
+    let err = ScreenEnvelope::parse(&v).unwrap_err();
+    assert!(format!("{err}").contains("matches no option id"), "{err}");
+}
+
+#[test]
+fn display_only_variants_may_use_free_form_ids() {
+    // No options → nothing to align to; the id is just the card caption.
+    let v = json!({
+        "title": "质感方向",
+        "options": [],
+        "screen": {
+            "fidelity": "texture",
+            "mock": { "kind": "text", "text": "card" },
+            "variants": [
+                { "id": "玻璃拟态", "theme": { "surface": "glass", "frost": 2 } },
+                { "id": "硬朗工业", "theme": { "surface": "metal", "frost": 1 } }
+            ]
+        }
+    });
+    ScreenEnvelope::parse(&v).expect("envelope");
+}
+
+#[test]
+fn a_malformed_spec_surfaces_as_an_envelope_error() {
+    let mut v = spec_args();
+    v["screen"]["fidelity"] = json!("photoreal");
+    assert!(ScreenEnvelope::parse(&v).is_err());
+
+    let mut v = spec_args();
+    v["screen"]["mock"]["kind"] = json!("chartjs");
+    assert!(ScreenEnvelope::parse(&v).is_err());
+}
+
+// ── reference (参考物贴片) ──────────────────────────────────────────────────
+
+#[test]
+fn reference_is_optional_and_carries_src_and_caption() {
+    let v = json!({
+        "title": "参考这个方向改，哪个更像？",
+        "options": [{ "id": "a", "label": "更接近" }],
+        "body_html": "<div class=\"mockup\"></div>",
+        "reference": { "src": "/tmp/zhentai.png", "caption": "正泰首页 · 2026-10" }
+    });
+    let env = ScreenEnvelope::parse(&v).expect("envelope");
+    let reference = env.reference.expect("reference");
+    assert_eq!(reference.src, "/tmp/zhentai.png");
+    assert_eq!(reference.caption.as_deref(), Some("正泰首页 · 2026-10"));
+    // The host sets this at save time; the model never does.
+    assert!(reference.resolved.is_none());
+}
+
+#[test]
+fn reference_absent_leaves_the_field_none() {
+    let v = json!({
+        "title": "配色方向，选一个？",
+        "options": [{ "id": "a", "label": "深空蓝" }],
+        "body_html": "<div class=\"mockup\"></div>"
+    });
+    let env = ScreenEnvelope::parse(&v).expect("envelope");
+    assert!(env.reference.is_none());
+}
+
+#[test]
+fn reference_requires_src() {
+    let v = json!({
+        "title": "参考这个方向改",
+        "options": [{ "id": "a", "label": "更接近" }],
+        "body_html": "<div></div>",
+        "reference": { "caption": "no source" }
+    });
+    assert!(ScreenEnvelope::parse(&v).is_err());
+
+    let v = json!({
+        "title": "参考这个方向改",
+        "options": [{ "id": "a", "label": "更接近" }],
+        "body_html": "<div></div>",
+        "reference": { "src": "   " }
+    });
+    assert!(ScreenEnvelope::parse(&v).is_err());
+}
+
+#[test]
+fn reference_src_rejects_control_characters() {
+    let v = json!({
+        "title": "参考这个方向改",
+        "options": [{ "id": "a", "label": "更接近" }],
+        "body_html": "<div></div>",
+        "reference": { "src": "/tmp/a\u{0000}b.png" }
+    });
+    assert!(ScreenEnvelope::parse(&v).is_err());
+}
+
+#[test]
+fn reference_caption_must_be_a_single_line() {
+    let v = json!({
+        "title": "参考这个方向改",
+        "options": [{ "id": "a", "label": "更接近" }],
+        "body_html": "<div></div>",
+        "reference": { "src": "/tmp/a.png", "caption": "one\ntwo" }
+    });
+    assert!(ScreenEnvelope::parse(&v).is_err());
+}
+
+// ── host-set fields ────────────────────────────────────────────────────────
+
+#[test]
+fn interstitial_is_the_hosts_to_set_and_never_the_models() {
+    // A tool call must not be able to park its own screen out of the version
+    // rail by declaring itself interstitial.
+    let mut v = full();
+    v["interstitial"] = json!(true);
+    let env = ScreenEnvelope::parse(&v).expect("parses");
+    assert!(!env.interstitial, "parse clears the host-set flag");
+}
+
+// ── the escape ledger ─────────────────────────────────────────────────────
+
+#[test]
+fn an_escape_tag_travels_with_a_body_html_push() {
+    // The tag is bookkeeping, never rendered: it names the shape the closed
+    // vocabulary could not hold so the same shape showing up twice is greppable
+    // evidence for what to add next.
+    let mut v = full();
+    v["escape"] = json!("timeline");
+    let env = ScreenEnvelope::parse(&v).expect("parses");
+    assert_eq!(env.escape.as_deref(), Some("timeline"));
+
+    let again = serde_json::from_value::<ScreenEnvelope>(serde_json::to_value(&env).unwrap())
+        .expect("round trip");
+    assert_eq!(again, env);
+}
+
+#[test]
+fn an_escape_tag_has_no_business_on_a_screen_push() {
+    // A `screen` is the vocabulary working — there is nothing escaped, so the
+    // tag would be a lie in the ledger.
+    let mut v = spec_args();
+    v["escape"] = json!("timeline");
+    let err = ScreenEnvelope::parse(&v).expect_err("escape on a screen");
+    assert!(matches!(err, EnvelopeError::InvalidField { .. }), "{err}");
+    assert!(format!("{err}").contains("escape"), "{err}");
+}
+
+#[test]
+fn an_escape_tag_names_a_shape_not_a_note() {
+    let mut v = full();
+    v["escape"] = json!("x".repeat(41));
+    let err = ScreenEnvelope::parse(&v).expect_err("a note is not a tag");
+    assert!(matches!(err, EnvelopeError::InvalidField { .. }), "{err}");
+
+    let mut v = full();
+    v["escape"] = json!("  ");
+    assert!(
+        ScreenEnvelope::parse(&v).is_err(),
+        "a blank tag is not a tag"
+    );
+}
+
+#[test]
+fn a_type_fumble_names_the_field_not_just_the_type() {
+    // A genuine type fumble (a boolean where a `ratio` weight or a `box` size
+    // wants a number) must name the field — a pathless "expected u32" costs a
+    // full re-push per guess.
+    let mut v = spec_args();
+    v["screen"]["mock"]["ratio"] = json!([true, 1]);
+    let err = ScreenEnvelope::parse(&v).expect_err("boolean weight");
+    let msg = format!("{err}");
+    assert!(msg.contains("screen.mock.ratio"), "{msg}");
+    assert!(msg.contains("invalid type"), "{msg}");
+
+    let mut v = spec_args();
+    v["screen"]["mock"]["children"][0] = json!({ "kind": "box", "id": "b", "w": true });
+    let err = ScreenEnvelope::parse(&v).expect_err("boolean w");
+    let msg = format!("{err}");
+    assert!(msg.contains("screen.mock.children[0].w"), "{msg}");
+}
+
+#[test]
+fn a_float_ratio_weight_is_a_weight_not_a_fumble() {
+    // Observed live: `ratio: [1, 5, 0.7]` — the model reaching for a finer
+    // split than whole numbers allow. Weights are proportions; the push round
+    // must not be spent re-typing them as integers.
+    let mut v = spec_args();
+    v["screen"]["mock"]["ratio"] = json!([1, 0.7]);
+    ScreenEnvelope::parse(&v).expect("float weights are weights");
+
+    let mut v = spec_args();
+    v["screen"]["mock"]["ratio"] = json!(["1", "3"]);
+    ScreenEnvelope::parse(&v).expect("numeric-string weights are weights");
+}
+
+#[test]
+fn a_non_positive_ratio_weight_is_rejected_by_name() {
+    // A zero or negative track is degenerate CSS — refuse it with the field,
+    // not with a render that silently collapses a child.
+    let mut v = spec_args();
+    v["screen"]["mock"]["ratio"] = json!([0, 1]);
+    let err = ScreenEnvelope::parse(&v).expect_err("zero weight");
+    let msg = format!("{err}");
+    assert!(msg.contains("mock.ratio[0]"), "{msg}");
+    assert!(msg.contains("positive"), "{msg}");
+
+    let mut v = spec_args();
+    v["screen"]["mock"]["ratio"] = json!([1, -2]);
+    let err = ScreenEnvelope::parse(&v).expect_err("negative weight");
+    let msg = format!("{err}");
+    assert!(msg.contains("mock.ratio[1]"), "{msg}");
+}
+
+#[test]
+fn a_numeric_box_share_is_not_a_fumble() {
+    // Observed twice in live runs: the model writes `h: 18` where the schema
+    // stringifies percentages. `18` and `"18%"` mean the same share of the
+    // parent — accept the number instead of spending a push round on it.
+    let mut v = spec_args();
+    // Keep the id the fixture's `emph` points at — this test is about the
+    // type of `w`/`h`, not about reference validation.
+    v["screen"]["mock"]["children"][0] = json!({ "kind": "box", "id": "hero", "w": 14, "h": 18 });
+    ScreenEnvelope::parse(&v).expect("numeric w/h are proportions");
+}
+
+#[test]
+fn a_stray_node_field_is_rejected_on_the_push_path() {
+    // The closed vocabulary is only closed if the push path enforces it —
+    // `ScreenEnvelope::parse` must run the spec checks, not just the derive
+    // (which silently drops fields a tagged enum does not declare).
+    let mut v = spec_args();
+    v["screen"]["mock"]["style"] = json!("border-radius: 8px");
+    let err = ScreenEnvelope::parse(&v).expect_err("stray field");
+    let msg = format!("{err}");
+    assert!(msg.contains("style"), "{msg}");
 }

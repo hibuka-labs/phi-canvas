@@ -9,11 +9,32 @@
 //! - the session token is injected into the page at serve time and nowhere
 //!   else (never on disk, never in a URL).
 
+use serde_json::Value;
+
 use crate::envelope::ScreenEnvelope;
 
 pub const FRAME_HTML: &str = include_str!("assets/frame.html");
+pub const COMPARE_HTML: &str = include_str!("assets/compare.html");
 pub const COMPONENTS_CSS: &str = include_str!("assets/components.css");
 pub const HELPER_JS: &str = include_str!("assets/helper.js");
+pub const COMPARE_JS: &str = include_str!("assets/compare.js");
+
+/// One design screen in the session's version history (gate 2 ③). Interstitial
+/// screens are excluded before they get here: the rail is the design.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VersionEntry {
+    pub seq: u64,
+    pub title: String,
+}
+
+/// How two versions are laid out beside each other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompareMode {
+    /// Two columns, whole screens at once.
+    SideBySide,
+    /// One stack with a draggable wipe (slider).
+    Wipe,
+}
 
 /// Fill `{{MARKER}}` placeholders in one left-to-right pass. Output is never
 /// rescanned, so substituted values may contain `{{` without consequence.
@@ -59,7 +80,16 @@ pub fn escape_html(text: &str) -> String {
 }
 
 /// Render one screen: frame + escaped metadata + verbatim body + options panel.
-pub fn render_screen(env: &ScreenEnvelope, seq: u64, token: &str) -> String {
+///
+/// `versions` is the design history for the version rail (gate 2 ③). Passing
+/// fewer than two entries renders no rail — a one-screen session has nothing
+/// to look back at yet.
+pub fn render_screen(
+    env: &ScreenEnvelope,
+    seq: u64,
+    token: &str,
+    versions: &[VersionEntry],
+) -> String {
     let subtitle = match &env.subtitle {
         Some(text) => format!("<p class=\"subtitle\">{}</p>", escape_html(text)),
         None => String::new(),
@@ -78,8 +108,10 @@ pub fn render_screen(env: &ScreenEnvelope, seq: u64, token: &str) -> String {
     let vars = [
         ("TOKEN", token),
         ("SEQ", &seq.to_string()),
+        ("VERSIONS", &render_versions(versions, seq)),
         ("TITLE", &escape_html(&env.title)),
         ("SUBTITLE", &subtitle),
+        ("REFERENCE", &render_reference(env)),
         ("OPTIONS", &render_options(env)),
         ("INDICATOR", indicator),
     ];
@@ -88,6 +120,88 @@ pub fn render_screen(env: &ScreenEnvelope, seq: u64, token: &str) -> String {
         fill_markers(head, &vars),
         env.body_html,
         fill_markers(tail, &vars)
+    )
+}
+
+/// The version rail: every design screen so far, this one marked, plus the way
+/// into the compare view. Hidden until there is more than one version — the
+/// rail is history, and history of one is just the present.
+fn render_versions(versions: &[VersionEntry], current: u64) -> String {
+    if versions.len() < 2 {
+        return String::new();
+    }
+    let mut chips = String::new();
+    for version in versions {
+        let class = if version.seq == current {
+            "version current"
+        } else {
+            "version"
+        };
+        chips.push_str(&format!(
+            r#"<a class="{class}" href="/screens/{seq}" title="{title}">{seq} · {title}</a>"#,
+            class = class,
+            seq = version.seq,
+            title = escape_html(&version.title),
+        ));
+    }
+    let (before, after) = default_compare_pair(versions, current);
+    format!(
+        r#"<nav class="versions" aria-label="版本">
+  <span class="versions-label">版本</span>
+  {chips}
+  <a class="versions-compare" href="/compare/{before}/{after}">对比</a>
+</nav>"#,
+        chips = chips,
+        before = before,
+        after = after,
+    )
+}
+
+/// The pair the compare view opens on: this screen and the version before it,
+/// so "what changed" is one click away from the screen that changed.
+fn default_compare_pair(versions: &[VersionEntry], current: u64) -> (u64, u64) {
+    if let Some(index) = versions.iter().position(|version| version.seq == current) {
+        if index > 0 {
+            return (versions[index - 1].seq, current);
+        }
+        if index + 1 < versions.len() {
+            return (current, versions[index + 1].seq);
+        }
+    }
+    (
+        versions
+            .first()
+            .map(|version| version.seq)
+            .unwrap_or(current),
+        versions
+            .last()
+            .map(|version| version.seq)
+            .unwrap_or(current),
+    )
+}
+
+/// The reference image block, or nothing. `resolved` is the host's doing (a
+/// copied file served from `/screens/{seq}/reference`, or a URI the page loads
+/// itself) — a reference that never resolved is left off the screen entirely
+/// rather than shown as a broken image.
+fn render_reference(env: &ScreenEnvelope) -> String {
+    let Some(reference) = env.reference.as_ref() else {
+        return String::new();
+    };
+    let Some(src) = reference.resolved.as_deref() else {
+        return String::new();
+    };
+    let caption = match &reference.caption {
+        Some(text) => format!("<figcaption>{}</figcaption>", escape_html(text)),
+        None => String::new(),
+    };
+    format!(
+        r#"<figure class="reference">
+  <img src="{src}" alt="参考图" loading="lazy">
+  {caption}
+</figure>"#,
+        src = escape_html(src),
+        caption = caption,
     )
 }
 
@@ -150,8 +264,10 @@ pub fn render_notice(title: &str, message: &str, token: &str, seq: u64) -> Strin
     let vars = [
         ("TOKEN", token),
         ("SEQ", &seq.to_string()),
+        ("VERSIONS", ""),
         ("TITLE", &escape_html(title)),
         ("SUBTITLE", ""),
+        ("REFERENCE", ""),
         ("OPTIONS", ""),
         ("INDICATOR", "回到终端继续讨论"),
     ];
@@ -160,5 +276,216 @@ pub fn render_notice(title: &str, message: &str, token: &str, seq: u64) -> Strin
         fill_markers(head, &vars),
         body,
         fill_markers(tail, &vars)
+    )
+}
+
+// ── version comparison (gate 2 ③) ─────────────────────────────────────────
+
+/// The compare page: pickers over the version history, the two screens side by
+/// side or wiped over each other, and — where both sides carry structure — a
+/// field-level list of what actually changed.
+pub fn render_compare(
+    before: (u64, &ScreenEnvelope),
+    after: (u64, &ScreenEnvelope),
+    versions: &[VersionEntry],
+    mode: CompareMode,
+) -> String {
+    let stage = match mode {
+        CompareMode::SideBySide => side_by_side(before, after),
+        CompareMode::Wipe => wipe_over(before, after),
+    };
+    let vars: [(&str, &str); 5] = [
+        ("PICK_A", &picker(versions, before.0)),
+        ("PICK_B", &picker(versions, after.0)),
+        ("MODES", &mode_links(before.0, after.0, mode)),
+        ("DIFF", &render_changes(before.1, after.1)),
+        ("COMPARE", &stage),
+    ];
+    fill_markers(COMPARE_HTML, &vars)
+}
+
+fn picker(versions: &[VersionEntry], selected: u64) -> String {
+    versions
+        .iter()
+        .map(|version| {
+            let mark = if version.seq == selected {
+                " selected"
+            } else {
+                ""
+            };
+            format!(
+                r#"<option value="{seq}"{mark}>{seq} · {title}</option>"#,
+                seq = version.seq,
+                mark = mark,
+                title = escape_html(&version.title),
+            )
+        })
+        .collect()
+}
+
+/// Mode is a link, not a widget: the page is one GET, and the browser's back
+/// button then walks the views the user tried.
+fn mode_links(before: u64, after: u64, mode: CompareMode) -> String {
+    let link = |label: &str, active: CompareMode, param: &str| {
+        let class = if mode == active {
+            "mode current"
+        } else {
+            "mode"
+        };
+        format!(r#"<a class="{class}" href="/compare/{before}/{after}/{param}">{label}</a>"#)
+    };
+    format!(
+        "{}{}",
+        link("并排", CompareMode::SideBySide, "split"),
+        link("滑块", CompareMode::Wipe, "slide")
+    )
+}
+
+fn side_by_side(before: (u64, &ScreenEnvelope), after: (u64, &ScreenEnvelope)) -> String {
+    format!(
+        r#"<div class="compare split">
+  <div class="pane">{}</div>
+  <div class="pane">{}</div>
+</div>"#,
+        pane(before),
+        pane(after),
+    )
+}
+
+/// The slider view: both bodies in one stack, the older one clipped to the
+/// left of the handle. A grid cell holds both, so the stack is as tall as the
+/// taller version and nothing is cropped away.
+fn wipe_over(before: (u64, &ScreenEnvelope), after: (u64, &ScreenEnvelope)) -> String {
+    let (before_seq, before_title) = head_of(before);
+    let (after_seq, after_title) = head_of(after);
+    format!(
+        r#"<div class="compare wipe">
+  <div class="wipe-heads">
+    <div class="wipe-head">{before_seq} · {before_title}</div>
+    <div class="wipe-head">{after_seq} · {after_title}</div>
+  </div>
+  <div class="wipe-stack" id="wipe-stack">
+    <div class="section body-region wipe-base">{after_body}</div>
+    <div class="section body-region wipe-cover">{before_body}</div>
+  </div>
+  <input class="wipe-range" id="wipe-range" type="range" min="0" max="100" value="50" aria-label="拖动对比两版">
+</div>"#,
+        before_seq = before_seq,
+        before_title = before_title,
+        after_seq = after_seq,
+        after_title = after_title,
+        before_body = before.1.body_html,
+        after_body = after.1.body_html,
+    )
+}
+
+fn pane((seq, env): (u64, &ScreenEnvelope)) -> String {
+    let (head_seq, head_title) = head_of((seq, env));
+    format!(
+        r#"<div class="pane-head">{head_seq} · {head_title}</div>
+<div class="section body-region">{body}</div>"#,
+        head_seq = head_seq,
+        head_title = head_title,
+        body = env.body_html,
+    )
+}
+
+fn head_of((seq, env): (u64, &ScreenEnvelope)) -> (String, String) {
+    (seq.to_string(), escape_html(&env.title))
+}
+
+/// Field-level change lines between two screens: what actually changed, in the
+/// structured fields. `body_html` is left out on purpose — it is what the
+/// compare stage already shows, and a line diff of markup is noise.
+pub fn change_lines(before: &ScreenEnvelope, after: &ScreenEnvelope) -> Vec<String> {
+    let mut out = Vec::new();
+    let (Some(before), Some(after)) = (metadata(before), metadata(after)) else {
+        return out;
+    };
+    diff_values("", &before, &after, &mut out);
+    out
+}
+
+/// The envelope as a value, minus the body.
+fn metadata(env: &ScreenEnvelope) -> Option<serde_json::Value> {
+    let mut clone = env.clone();
+    clone.body_html = String::new();
+    serde_json::to_value(&clone).ok()
+}
+
+fn diff_values(path: &str, before: &Value, after: &Value, out: &mut Vec<String>) {
+    match (before, after) {
+        (Value::Object(before), Value::Object(after)) => {
+            for (key, value) in before {
+                let child = join_path(path, key);
+                match after.get(key) {
+                    Some(other) => diff_values(&child, value, other, out),
+                    None => out.push(format!("{child}: 没了")),
+                }
+            }
+            for (key, value) in after {
+                if !before.contains_key(key) {
+                    out.push(format!(
+                        "{}: 新增 {}",
+                        join_path(path, key),
+                        show_value(value)
+                    ));
+                }
+            }
+        }
+        (Value::Array(before), Value::Array(after)) => {
+            for (index, (value, other)) in before.iter().zip(after.iter()).enumerate() {
+                diff_values(&format!("{path}[{index}]"), value, other, out);
+            }
+            if before.len() != after.len() {
+                out.push(format!("{path}: {} 项 → {} 项", before.len(), after.len()));
+            }
+        }
+        _ if before != after => {
+            out.push(format!(
+                "{path}: {} → {}",
+                show_value(before),
+                show_value(after)
+            ));
+        }
+        _ => {}
+    }
+}
+
+fn join_path(path: &str, key: &str) -> String {
+    if path.is_empty() {
+        key.to_string()
+    } else {
+        format!("{path}.{key}")
+    }
+}
+
+fn show_value(value: &Value) -> String {
+    const MAX: usize = 48;
+    let text = match value {
+        Value::String(text) => format!("{text:?}"),
+        other => other.to_string(),
+    };
+    if text.chars().count() > MAX {
+        let head: String = text.chars().take(MAX).collect();
+        format!("{head}…")
+    } else {
+        text
+    }
+}
+
+fn render_changes(before: &ScreenEnvelope, after: &ScreenEnvelope) -> String {
+    let lines = change_lines(before, after);
+    if lines.is_empty() {
+        return String::new();
+    }
+    let items: String = lines
+        .iter()
+        .map(|line| format!("<li>{}</li>", escape_html(line)))
+        .collect();
+    format!(
+        r#"<details class="changes" open><summary>改了什么 · {} 项</summary><ul>{}</ul></details>"#,
+        lines.len(),
+        items
     )
 }

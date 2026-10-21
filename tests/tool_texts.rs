@@ -4,7 +4,8 @@
 use std::sync::{Arc, Mutex};
 
 use phi_canvas::tools::{
-    BrowserLauncher, CanvasTools, LaunchDecision, TEXT_CLOSED, ToolCallError, tool_descriptors,
+    BrowserLauncher, CanvasTools, LaunchDecision, TEXT_CLOSED, TEXT_SPEC_OVER_HTML, ToolCallError,
+    tool_descriptors,
 };
 use serde_json::json;
 
@@ -292,4 +293,174 @@ async fn launch_decision_can_be_settled_after_the_fact() {
         text.ends_with("browser launched"),
         "settled decision stays honest: {text}"
     );
+}
+
+// ---- `screen` on the push path (gate 2) ----
+
+fn spec_args() -> serde_json::Value {
+    json!({
+        "title": "配色方向",
+        "options": [
+            { "id": "deep-blue", "label": "深空蓝" },
+            { "id": "neon-purple", "label": "暗紫霓虹" }
+        ],
+        "screen": {
+            "fidelity": "color",
+            "mock": {
+                "kind": "cols",
+                "children": [
+                    { "kind": "hero", "id": "hero", "text": "128,640" },
+                    { "kind": "button", "id": "cta", "text": "导出" }
+                ]
+            },
+            "variants": [
+                { "id": "deep-blue", "theme": { "bg": "#0A1428" }, "emph": ["hero"] },
+                { "id": "neon-purple", "theme": { "bg": "#12071F" }, "emph": ["cta"] }
+            ]
+        }
+    })
+}
+
+fn stored_fragments(store_root: &std::path::Path) -> Vec<String> {
+    let dir = store_root.join("screens");
+    let mut out = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            if entry.path().extension().is_some_and(|e| e == "html") {
+                out.push(std::fs::read_to_string(entry.path()).unwrap());
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+fn stored_sidecars(store_root: &std::path::Path) -> Vec<serde_json::Value> {
+    let dir = store_root.join("screens");
+    let mut out = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            if entry.path().extension().is_some_and(|e| e == "json") {
+                out.push(
+                    serde_json::from_str(&std::fs::read_to_string(entry.path()).unwrap()).unwrap(),
+                );
+            }
+        }
+    }
+    out
+}
+
+#[tokio::test]
+async fn push_with_a_spec_renders_the_body_and_keeps_the_locked_text() {
+    let tmp = tempfile::tempdir().unwrap();
+    let store_root = tmp.path().join("canvas");
+    let tools = CanvasTools::new(store_root.clone(), "sess-spec");
+
+    let text = tools.push(&spec_args()).await.unwrap();
+    assert!(
+        text.contains("| screen: 配色方向 | options: 2 | awaiting selection"),
+        "the M3 format is unchanged: {text}"
+    );
+    assert!(
+        !text.contains(TEXT_SPEC_OVER_HTML),
+        "no note when only one of the two was given"
+    );
+
+    let fragments = stored_fragments(&store_root);
+    assert_eq!(fragments.len(), 1);
+    assert!(fragments[0].contains("m-screen"), "{}", fragments[0]);
+    assert!(fragments[0].contains("--m-bg:#0A1428"), "{}", fragments[0]);
+    assert!(fragments[0].contains("m-hero m-emph"), "{}", fragments[0]);
+
+    // The spec rides along in the sidecar so version comparison can diff it.
+    let sidecars = stored_sidecars(&store_root);
+    assert_eq!(sidecars.len(), 1);
+    assert!(
+        sidecars[0]["screen"]["fidelity"] == json!("color"),
+        "{sidecars:?}"
+    );
+    assert!(
+        sidecars[0]["body_html"].is_null() || sidecars[0]["body_html"] == json!(""),
+        "the heavy rendered body does not live in the sidecar: {sidecars:?}"
+    );
+}
+
+#[tokio::test]
+async fn push_with_both_screen_and_body_html_appends_the_note() {
+    let tmp = tempfile::tempdir().unwrap();
+    let tools = CanvasTools::new(tmp.path().join("canvas"), "sess-both");
+
+    let mut args = spec_args();
+    args["body_html"] = json!("<div class=\"cards\">hand written</div>");
+    let text = tools.push(&args).await.unwrap();
+    assert!(text.starts_with("canvas: "), "base text is intact: {text}");
+    assert!(
+        text.ends_with(TEXT_SPEC_OVER_HTML),
+        "the note is appended, the format is not rewritten: {text}"
+    );
+}
+
+#[tokio::test]
+async fn a_bad_spec_is_a_tool_error_not_a_crash() {
+    let (_tmp, tools) = tools();
+    let mut args = spec_args();
+    args["screen"]["mock"]["kind"] = json!("chartjs");
+    let err = tools.push(&args).await.unwrap_err();
+    assert!(!err.to_string().is_empty());
+
+    let mut args = spec_args();
+    args["screen"]["fidelity"] = json!("photoreal");
+    assert!(tools.push(&args).await.is_err());
+}
+
+#[test]
+fn the_screen_description_names_exactly_the_accepted_kinds() {
+    // The description is the model's only contract for the closed vocabulary:
+    // a kind named there but rejected by the parser (or accepted but unnamed)
+    // burns a live push round. This pins the description against NODE_KINDS
+    // and NODE_KINDS against the parser's key table.
+    let push = tool_descriptors()
+        .into_iter()
+        .find(|d| d.name == "canvas_push")
+        .expect("canvas_push descriptor");
+    let description = push.schema["properties"]["screen"]["description"]
+        .as_str()
+        .expect("screen description is text");
+
+    let start = description
+        .find("closed kind set")
+        .expect("kind list marker");
+    let end = description.find("A kind only takes").expect("end marker");
+    let mut listed: Vec<String> = description[start..end]
+        .split('\'')
+        .enumerate()
+        .filter(|(i, _)| i % 2 == 1)
+        .map(|(_, name)| name.to_string())
+        .filter(|name| !name.is_empty() && name.chars().all(|c| c.is_ascii_lowercase() || c == '_'))
+        .collect();
+    listed.sort();
+    let mut published: Vec<String> = phi_canvas::spec::NODE_KINDS
+        .iter()
+        .map(|kind| kind.to_string())
+        .collect();
+    published.sort();
+    assert_eq!(
+        listed, published,
+        "the screen description's kind names must be exactly NODE_KINDS"
+    );
+
+    // Every published name must reach the parser's key table — nothing the
+    // description tells the model to send may die as "unknown node kind".
+    // (Kinds with no required fields parse empty — that is fine.)
+    for kind in phi_canvas::spec::NODE_KINDS {
+        if let Err(err) = phi_canvas::ScreenSpec::parse(&json!({
+            "fidelity": "wireframe",
+            "mock": { "kind": kind }
+        })) {
+            assert!(
+                !err.to_string().contains("unknown node kind"),
+                "{kind} is published but the parser rejects it: {err}"
+            );
+        }
+    }
 }
