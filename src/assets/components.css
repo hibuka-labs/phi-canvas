@@ -677,7 +677,13 @@ body {
 
 .m-cols, .m-rows { display: grid; gap: 0.65rem; }
 .m-cols { grid-template-columns: var(--ratio, none); }
-.m-rows { grid-template-rows: var(--ratio, none); }
+.m-rows {
+  grid-template-rows: var(--ratio, none);
+  /* Pack hugged rows at the start. `align-content: normal` stretches auto
+   * tracks to fill a definite height equally — the same band-equalization the
+   * unweighted-track rule just left behind, one level down. */
+  align-content: start;
+}
 .m-stack {
   display: grid;
   gap: 0.65rem;
@@ -863,6 +869,9 @@ body {
   overflow: hidden;
   display: flex;
   align-items: flex-end;
+  /* A chart band hugs its track now, and this node carries no content height
+   * of its own — without a floor it renders as a label strip. */
+  min-height: 6.5rem;
 }
 .m-area::before {
   content: "";
@@ -887,6 +896,8 @@ body {
   overflow: hidden;
   display: flex;
   align-items: flex-end;
+  /* Same floor as `.m-area`, a touch taller — this is the center-piece. */
+  min-height: 8rem;
 }
 .m-viz::before {
   content: "";
@@ -1375,4 +1386,34 @@ body {
 
 @media (max-width: 720px) {
   .m-variants { grid-template-columns: 1fr; }
+}
+
+/* ── antd island slots (P1) ─────────────────────────────────────────────
+   `m-antd-slot` is the hydrate target `/assets/antd-runtime.js` fills with a
+   real antd component. The slot keeps the grid cell honest (min sizes, one
+   column); the component face is the library's, emph is the one accent the
+   mock may place. Wireframe screens never emit these. */
+.m-antd-slot {
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  /* Top-aligned: a short component in a stretched cell sits at the top of its
+   * band, one gap below it — centering split the same empty band in two. */
+  justify-content: flex-start;
+}
+.m-antd-slot.m-emph {
+  outline: 2px solid var(--m-accent, #4c7dff);
+  outline-offset: -2px;
+  border-radius: 6px;
+}
+
+/* ── viewing mode: a record, not a pick surface ───────────────────────────── */
+/* Historical versions draw the question but never offer a hand to click. */
+.view-only .option { cursor: default; }
+.view-only .option:hover {
+  border-color: var(--border);
+  transform: none;
+  box-shadow: none;
 }

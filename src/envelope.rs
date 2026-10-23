@@ -141,9 +141,41 @@ impl ScreenEnvelope {
         // of the envelope derive, which can only stop at `screen.mock` because
         // a tagged node enum buffers its content. Everything else gets the
         // tracked parse so type errors name their field path too.
+        //
+        // `screen_file` is the whole-screen round trip: the model writes the
+        // screen JSON to a file and passes its path, so a large screen is
+        // never hand-compressed into the tool call. Both keys at once is a
+        // contradiction — refuse rather than guess which one the model meant.
         let mut rest = value.clone();
-        let screen = match rest.as_object_mut().and_then(|obj| obj.remove("screen")) {
-            Some(raw) if !raw.is_null() => Some(ScreenSpec::parse(&raw)?),
+        let screen_file = rest
+            .as_object_mut()
+            .and_then(|obj| obj.remove("screen_file"));
+        let screen_raw = rest.as_object_mut().and_then(|obj| obj.remove("screen"));
+        let screen = match (screen_raw, screen_file) {
+            (Some(raw), Some(_)) if !raw.is_null() => {
+                return Err(EnvelopeError::InvalidField {
+                    field: "screen_file".into(),
+                    reason: "give either `screen` or `screen_file`, not both".into(),
+                });
+            }
+            (_, Some(path)) => {
+                let path = path.as_str().ok_or_else(|| EnvelopeError::InvalidField {
+                    field: "screen_file".into(),
+                    reason: "must be a file path string".into(),
+                })?;
+                let content =
+                    std::fs::read_to_string(path).map_err(|err| EnvelopeError::InvalidField {
+                        field: "screen_file".into(),
+                        reason: format!("cannot read `{path}`: {err}"),
+                    })?;
+                let raw: Value =
+                    serde_json::from_str(&content).map_err(|err| EnvelopeError::InvalidField {
+                        field: "screen_file".into(),
+                        reason: format!("`{path}` is not valid JSON: {err}"),
+                    })?;
+                Some(ScreenSpec::parse(&raw)?)
+            }
+            (Some(raw), None) if !raw.is_null() => Some(ScreenSpec::parse(&raw)?),
             _ => None,
         };
         let mut env: ScreenEnvelope = crate::spec::parse_tracked(&rest)

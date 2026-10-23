@@ -600,19 +600,25 @@ pub struct ScreenSpec {
 pub enum SpecError {
     #[error("screen must be a JSON object")]
     NotAnObject,
-    /// `screen` arrived as a JSON *string*. A string whose content is a valid
-    /// object is unwrapped and accepted; this is the failure when the content
-    /// itself is broken. Both facts have to reach the model — "must be a JSON
-    /// object" alone leaves it re-sending the same stringified copy, because
-    /// it already believes it sent an object (observed twice on the live push
-    /// path: a `variants` tail leaking without its `"variants": [` key).
+    /// `screen` arrived as a JSON *string*. Strings are rejected even when
+    /// their content parses — the leniency kept the model on the string path,
+    /// where hand-compressed copies break (session 20261022_bb8c2dc3: five
+    /// identical stringified failures at the same column). The repair is
+    /// structural: write the screen to a file and pass `screen_file`, or send
+    /// the object itself.
     #[error(
-        "screen must be a JSON object - it arrived as a string whose content is not valid JSON ({detail}) near `{near}`; send `screen` as the object itself, never stringified"
+        "screen must be a JSON object - it arrived stringified (one JSON string, not the object). Write the screen to a file and pass its path as `screen_file`, or send `screen` as the object itself - never a stringified copy"
+    )]
+    Stringified,
+    /// A stringified `screen` whose content is not even valid JSON — say what
+    /// broke and where, on top of the stringified lesson.
+    #[error(
+        "screen must be a JSON object - it arrived as a string whose content is not valid JSON ({detail}) near `{near}`. Write the screen to a file and pass its path as `screen_file`, or send `screen` as the object itself - never a stringified copy"
     )]
     StringifiedBroken { detail: String, near: String },
     /// A stringified `screen` whose content is valid JSON but not an object.
     #[error(
-        "screen must be a JSON object - it arrived as a string that parses as {found}, not an object; send `screen` as the object itself, never stringified"
+        "screen must be a JSON object - it arrived as a string that parses as {found}, not an object. Write the screen to a file and pass its path as `screen_file`, or send `screen` as the object itself - never a stringified copy"
     )]
     StringifiedNotObject { found: String },
     #[error("invalid screen: {0}")]
@@ -701,6 +707,10 @@ fn refine_node_type_error(node: &serde_json::Value, path: &str) -> Option<SpecEr
                 }
                 return Some(if is_node(item) {
                     refine_node_type_error(item, &item_path)
+                        .or_else(|| {
+                            node_in_string_slot(item, &reason)
+                                .map(|teach| invalid(&item_path, &teach))
+                        })
                         .unwrap_or_else(|| invalid(&item_path, &reason))
                 } else {
                     invalid(&item_path, &reason)
@@ -725,6 +735,9 @@ fn probe_field(kind: &str, key: &str, value: &serde_json::Value) -> Option<Strin
     if err.message.contains("missing field") {
         return None;
     }
+    if let Some(teach) = node_in_string_slot(value, &err.message) {
+        return Some(teach);
+    }
     Some(err.message)
 }
 
@@ -732,6 +745,25 @@ fn is_node(value: &serde_json::Value) -> bool {
     value
         .as_object()
         .is_some_and(|obj| obj.get("kind").is_some_and(serde_json::Value::is_string))
+}
+
+/// A node sent where a field wants a string — serde's "invalid type: map,
+/// expected a string" is true but teaches nothing. The live fumble is a
+/// control node inside `items` (twice, on the push path): say what the field
+/// takes and where the node belongs instead.
+fn node_in_string_slot(node: &serde_json::Value, reason: &str) -> Option<String> {
+    if !reason.contains("expected a string") {
+        return None;
+    }
+    let kind = node
+        .as_object()?
+        .get("kind")
+        .and_then(serde_json::Value::as_str)?;
+    Some(format!(
+        "expected a string, got a `{kind}` node — this field takes label text \
+         (`items` entries are label strings); a `{kind}` node belongs beside it \
+         in the layout tree (`cols`/`rows`/`body`), never inside this field"
+    ))
 }
 
 /// The JSON kind name for a diagnostic ("a JSON array").
@@ -778,18 +810,14 @@ impl ScreenSpec {
     /// Parse and validate a `screen` argument.
     pub fn parse(value: &serde_json::Value) -> Result<Self, SpecError> {
         // A `screen` sometimes arrives double-encoded — the whole object as
-        // one JSON string (observed on the live push path). Unwrap a valid
-        // one; the alternative is a rejected push whose only content is
-        // telling the model what it already said. The live failures were not
-        // valid though — the stringified copies were *malformed* — so a
-        // broken string is diagnosed as exactly that, with the spot it broke.
-        let unwrapped;
+        // one JSON string. Every string is rejected: unwrapping the valid ones
+        // is what kept the model stringifying (session 20261022_bb8c2dc3, five
+        // broken copies in a row). A broken one is diagnosed with the spot it
+        // broke so the next attempt is not blind; all three answers name
+        // `screen_file` as the way to send a big screen whole.
         let value = match value.as_str() {
             Some(text) => match serde_json::from_str::<serde_json::Value>(text) {
-                Ok(inner) if inner.is_object() => {
-                    unwrapped = inner;
-                    &unwrapped
-                }
+                Ok(inner) if inner.is_object() => return Err(SpecError::Stringified),
                 Ok(inner) => {
                     return Err(SpecError::StringifiedNotObject {
                         found: json_kind(&inner).to_string(),

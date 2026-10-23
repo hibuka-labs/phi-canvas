@@ -264,6 +264,14 @@ async fn click_action_must_match_screen_mode() {
     let tmp = tempfile::tempdir().unwrap();
     let canvas = open_canvas(&tmp).await;
     let single = canvas.push(envelope()).await.unwrap();
+
+    // Mode checks run against the screen on offer (a historical screen is
+    // rejected earlier still — see `only_the_screen_on_offer_takes_a_choice`).
+    let body = format!(r#"{{"type":"confirm","screen":{}}}"#, single.screen);
+    let request = post_json(canvas.port(), "/events", canvas.session_token(), &body);
+    let (status, _) = send(canvas.port(), &request).await;
+    assert_eq!(status, 400, "confirm requires a multiselect screen");
+
     let display = canvas
         .push(
             ScreenEnvelope::parse(
@@ -273,11 +281,6 @@ async fn click_action_must_match_screen_mode() {
         )
         .await
         .unwrap();
-
-    let body = format!(r#"{{"type":"confirm","screen":{}}}"#, single.screen);
-    let request = post_json(canvas.port(), "/events", canvas.session_token(), &body);
-    let (status, _) = send(canvas.port(), &request).await;
-    assert_eq!(status, 400, "confirm requires a multiselect screen");
 
     let body = format!(r#"{{"type":"skip","screen":{}}}"#, display.screen);
     let request = post_json(canvas.port(), "/events", canvas.session_token(), &body);
@@ -291,6 +294,35 @@ async fn click_action_must_match_screen_mode() {
     let request = post_json(canvas.port(), "/events", canvas.session_token(), &body);
     let (status, _) = send(canvas.port(), &request).await;
     assert_eq!(status, 400, "display-only screens take no selection");
+
+    canvas.shutdown().await;
+}
+
+/// Viewing mode (M4): the version rail is for looking. A click that somehow
+/// still fires against a historical screen must not become a `(画布选择)`
+/// turn — only the screen currently on offer takes a choice.
+#[tokio::test]
+async fn only_the_screen_on_offer_takes_a_choice() {
+    let tmp = tempfile::tempdir().unwrap();
+    let canvas = open_canvas(&tmp).await;
+    let first = canvas.push(envelope()).await.unwrap();
+    let current = canvas.push(envelope()).await.unwrap();
+
+    let body = format!(
+        r#"{{"type":"select","screen":{},"option_id":"a"}}"#,
+        first.screen
+    );
+    let request = post_json(canvas.port(), "/events", canvas.session_token(), &body);
+    let (status, _) = send(canvas.port(), &request).await;
+    assert_eq!(status, 409, "a historical screen is not on offer: {status}");
+
+    let body = format!(
+        r#"{{"type":"select","screen":{},"option_id":"a"}}"#,
+        current.screen
+    );
+    let request = post_json(canvas.port(), "/events", canvas.session_token(), &body);
+    let (status, _) = send(canvas.port(), &request).await;
+    assert_eq!(status, 204, "the screen on offer still takes one: {status}");
 
     canvas.shutdown().await;
 }

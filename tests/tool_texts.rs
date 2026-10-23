@@ -112,17 +112,21 @@ async fn implicit_open_on_push_binds_the_server_but_never_launches() {
     // must not pop a browser — the launch always waits for the y consent.
     let (_tmp, tools, spy) = tools_with_spy(LaunchDecision::Launched);
 
-    let text = tools.push(&push_args()).await.unwrap();
+    let outcome = tools.push(&push_args()).await.unwrap();
     let port = tools
         .canvas()
         .await
         .expect("implicit open must bind")
         .port();
     assert_eq!(
-        text,
+        outcome.text,
         format!(
             "canvas: http://127.0.0.1:{port} | screen: 大屏顶部导航，哪个布局更专业？ | options: 3 | awaiting selection"
         )
+    );
+    assert!(
+        outcome.awaiting_selection,
+        "an options screen parks the run on the user's pick"
     );
     assert!(
         spy.calls().is_empty(),
@@ -134,14 +138,18 @@ async fn implicit_open_on_push_binds_the_server_but_never_launches() {
 async fn push_display_only_screen_returns_display_text() {
     let (_tmp, tools) = tools();
 
-    let text = tools
+    let outcome = tools
         .push(&json!({ "title": "配色方向", "options": [], "body_html": "<p>x</p>" }))
         .await
         .unwrap();
     let port = tools.canvas().await.expect("canvas bound").port();
     assert_eq!(
-        text,
+        outcome.text,
         format!("canvas: http://127.0.0.1:{port} | screen: 配色方向 | display only")
+    );
+    assert!(
+        !outcome.awaiting_selection,
+        "a display-only screen waits for nothing"
     );
 }
 
@@ -159,8 +167,10 @@ async fn push_after_close_rebinds_to_a_new_port_without_launching() {
     );
     assert!(
         second
+            .text
             .contains("| screen: 大屏顶部导航，哪个布局更专业？ | options: 3 | awaiting selection"),
-        "recovered push keeps the M3 text shape: {second}"
+        "recovered push keeps the M3 text shape: {}",
+        second.text
     );
     assert!(
         spy.calls().is_empty(),
@@ -231,7 +241,15 @@ fn tool_descriptors_cover_the_three_tools() {
         required.contains(&"title") && required.contains(&"options"),
         "push schema must require title + options: {required:?}"
     );
-    for field in ["title", "subtitle", "options", "body_html", "multiselect"] {
+    for field in [
+        "title",
+        "subtitle",
+        "options",
+        "body_html",
+        "screen",
+        "screen_file",
+        "multiselect",
+    ] {
         assert!(
             push.schema["properties"].get(field).is_some(),
             "push schema must describe `{field}`"
@@ -356,21 +374,33 @@ async fn push_with_a_spec_renders_the_body_and_keeps_the_locked_text() {
     let store_root = tmp.path().join("canvas");
     let tools = CanvasTools::new(store_root.clone(), "sess-spec");
 
-    let text = tools.push(&spec_args()).await.unwrap();
+    let outcome = tools.push(&spec_args()).await.unwrap();
     assert!(
-        text.contains("| screen: 配色方向 | options: 2 | awaiting selection"),
-        "the M3 format is unchanged: {text}"
+        outcome
+            .text
+            .contains("| screen: 配色方向 | options: 2 | awaiting selection"),
+        "the M3 format is unchanged: {}",
+        outcome.text
     );
     assert!(
-        !text.contains(TEXT_SPEC_OVER_HTML),
+        !outcome.text.contains(TEXT_SPEC_OVER_HTML),
         "no note when only one of the two was given"
+    );
+    assert!(
+        outcome.awaiting_selection,
+        "a spec screen with options parks on the pick"
     );
 
     let fragments = stored_fragments(&store_root);
     assert_eq!(fragments.len(), 1);
     assert!(fragments[0].contains("m-screen"), "{}", fragments[0]);
     assert!(fragments[0].contains("--m-bg:#0A1428"), "{}", fragments[0]);
-    assert!(fragments[0].contains("m-hero m-emph"), "{}", fragments[0]);
+    // At color wide the hero is an antd slot, and the emphasis rides it.
+    assert!(
+        fragments[0].contains("m-antd-slot m-emph\" data-antd-kind=\"hero\""),
+        "{}",
+        fragments[0]
+    );
 
     // The spec rides along in the sidecar so version comparison can diff it.
     let sidecars = stored_sidecars(&store_root);
@@ -392,11 +422,16 @@ async fn push_with_both_screen_and_body_html_appends_the_note() {
 
     let mut args = spec_args();
     args["body_html"] = json!("<div class=\"cards\">hand written</div>");
-    let text = tools.push(&args).await.unwrap();
-    assert!(text.starts_with("canvas: "), "base text is intact: {text}");
+    let outcome = tools.push(&args).await.unwrap();
     assert!(
-        text.ends_with(TEXT_SPEC_OVER_HTML),
-        "the note is appended, the format is not rewritten: {text}"
+        outcome.text.starts_with("canvas: "),
+        "base text is intact: {}",
+        outcome.text
+    );
+    assert!(
+        outcome.text.ends_with(TEXT_SPEC_OVER_HTML),
+        "the note is appended, the format is not rewritten: {}",
+        outcome.text
     );
 }
 

@@ -530,3 +530,69 @@ fn a_stray_node_field_is_rejected_on_the_push_path() {
     let msg = format!("{err}");
     assert!(msg.contains("style"), "{msg}");
 }
+
+// ── `screen_file`: the whole-screen round trip (P1) ─────────────────────────
+
+#[test]
+fn a_screen_file_round_trips_the_whole_screen() {
+    // A big screen must survive the call intact: the model writes the JSON to
+    // a file and names it. What lands in the envelope is exactly what the
+    // inline `screen` would have produced.
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("screen.json");
+    std::fs::write(&path, spec_args()["screen"].to_string()).unwrap();
+
+    let mut v = spec_args();
+    v.as_object_mut().unwrap().remove("screen");
+    v["screen_file"] = json!(path.to_string_lossy());
+
+    let env = ScreenEnvelope::parse(&v).expect("screen_file envelope");
+    let inline = ScreenEnvelope::parse(&spec_args()).expect("inline envelope");
+    assert_eq!(env.screen, inline.screen, "file and inline agree");
+    assert!(env.has_spec());
+}
+
+#[test]
+fn screen_and_screen_file_together_are_refused() {
+    // Two sources for one screen is a contradiction — say so instead of
+    // silently picking a winner.
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("screen.json");
+    std::fs::write(&path, spec_args()["screen"].to_string()).unwrap();
+
+    let mut v = spec_args();
+    v["screen_file"] = json!(path.to_string_lossy());
+    let err = ScreenEnvelope::parse(&v).expect_err("both keys");
+    let msg = format!("{err}");
+    assert!(msg.contains("screen_file"), "{msg}");
+    assert!(msg.contains("not both"), "{msg}");
+}
+
+#[test]
+fn a_missing_screen_file_names_the_path() {
+    let mut v = spec_args();
+    v.as_object_mut().unwrap().remove("screen");
+    v["screen_file"] = json!("/nonexistent/screen.json");
+    let err = ScreenEnvelope::parse(&v).expect_err("missing file");
+    let msg = format!("{err}");
+    assert!(msg.contains("screen_file"), "{msg}");
+    assert!(msg.contains("/nonexistent/screen.json"), "{msg}");
+}
+
+#[test]
+fn a_stringified_screen_inside_the_file_is_still_rejected() {
+    // The file is not a loophole: it must hold the object itself. A string
+    // copy inside it dies the same way an inline string does.
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("screen.json");
+    std::fs::write(&path, json!(spec_args()["screen"].to_string()).to_string()).unwrap();
+
+    let mut v = spec_args();
+    v.as_object_mut().unwrap().remove("screen");
+    v["screen_file"] = json!(path.to_string_lossy());
+    let err = ScreenEnvelope::parse(&v).expect_err("stringified inside file");
+    assert!(
+        format!("{err}").contains("screen_file"),
+        "the repair path is still named: {err}"
+    );
+}

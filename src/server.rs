@@ -97,6 +97,19 @@ struct CanvasState {
     current: Option<u64>,
     closed: Option<CloseReason>,
     notice_seq: Option<u64>,
+    /// The last answer a click gave — the receipt line the *next* page load
+    /// shows. The page reloads on every screen change (`window.location.
+    /// reload` in the helper), so a click's highlight dies with the old page;
+    /// this is what keeps "what did I pick?" answerable. A restore starts
+    /// without one: the events log is history, not state to rebuild.
+    last_pick: Option<LastPick>,
+}
+
+/// A pick the receipt line names: the screen it landed on (the receipt is for
+/// *later* screens) and the label the user saw.
+struct LastPick {
+    screen: u64,
+    label: String,
 }
 
 impl CanvasState {
@@ -107,6 +120,7 @@ impl CanvasState {
             current: None,
             closed: None,
             notice_seq: None,
+            last_pick: None,
         }
     }
 
@@ -362,6 +376,7 @@ fn router(inner: Arc<Inner>) -> Router {
         .route("/assets/components.css", get(stylesheet))
         .route("/assets/helper.js", get(helper))
         .route("/assets/compare.js", get(compare_script))
+        .route("/assets/antd-runtime.js", get(antd_runtime))
         .route("/events", post(post_event))
         .layer(middleware::from_fn_with_state(inner.clone(), guard))
         .with_state(inner)
@@ -434,6 +449,7 @@ fn render_current(inner: &Inner) -> String {
             message,
             inner.token.as_str(),
             state.notice_seq.unwrap_or(0),
+            false,
         );
     }
     match state
@@ -442,13 +458,23 @@ fn render_current(inner: &Inner) -> String {
     {
         Some((seq, env)) => {
             let versions = version_entries(&state);
-            assets::render_screen(env, seq, inner.token.as_str(), &versions)
+            let prior = state
+                .last_pick
+                .as_ref()
+                .filter(|pick| pick.screen != seq)
+                .map(|pick| pick.label.as_str());
+            // The index route only ever shows the screen on offer.
+            assets::render_screen(env, seq, inner.token.as_str(), &versions, true, prior)
         }
+        // Live: the promise "会自动出现在这里" is the page's whole job — the
+        // first push lands after the browser is already open (M3 opens on
+        // `canvas_open`, the push comes when the model is done composing).
         None => assets::render_notice(
             "等待第一屏",
             "agent 推送方案后会自动出现在这里。",
             inner.token.as_str(),
             0,
+            true,
         ),
     }
 }
@@ -477,11 +503,21 @@ async fn screen(State(inner): State<Arc<Inner>>, Path(seq): Path<u64>) -> Respon
     match state.screens.get(&seq) {
         Some(env) => {
             let versions = version_entries(&state);
+            // A historical version is a look back, not a second chance to
+            // answer — only the screen on offer renders as clickable.
+            let live = Some(seq) == state.current && state.closed.is_none();
+            let prior = state
+                .last_pick
+                .as_ref()
+                .filter(|pick| pick.screen != seq)
+                .map(|pick| pick.label.as_str());
             Html(assets::render_screen(
                 env,
                 seq,
                 inner.token.as_str(),
                 &versions,
+                live,
+                prior,
             ))
             .into_response()
         }
@@ -530,6 +566,7 @@ fn compare_page(
             "至少推两屏设计之后，这里才能并排或拖滑块。",
             inner.token.as_str(),
             0,
+            false,
         ))
         .into_response();
     }
@@ -617,6 +654,14 @@ async fn compare_script() -> Response {
         .into_response()
 }
 
+async fn antd_runtime() -> Response {
+    (
+        [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
+        assets::ANTD_RUNTIME_JS,
+    )
+        .into_response()
+}
+
 async fn post_event(
     State(inner): State<Arc<Inner>>,
     headers: HeaderMap,
@@ -630,7 +675,7 @@ async fn post_event(
         return (StatusCode::UNAUTHORIZED, "missing or bad session token").into_response();
     }
 
-    {
+    let receipt_label = {
         let state = inner.state.read().unwrap();
         if state.closed.is_some() {
             return (StatusCode::CONFLICT, "canvas is closed").into_response();
@@ -638,6 +683,13 @@ async fn post_event(
         let Some(env) = state.screens.get(&input.screen) else {
             return (StatusCode::NOT_FOUND, "unknown screen").into_response();
         };
+        // Choices land only on the screen that is on offer. A pick from a
+        // historical version (the rail is for looking) is not a decision —
+        // this is the server-side half of the viewing-mode guard; the page
+        // half is `render_options(live)`.
+        if Some(input.screen) != state.current {
+            return (StatusCode::CONFLICT, "this screen is not on offer").into_response();
+        }
         let invalid = match &input.action {
             EventAction::Select { option_id } => {
                 !env.options.iter().any(|option| &option.id == option_id)
@@ -648,12 +700,30 @@ async fn post_event(
         if invalid {
             return (StatusCode::BAD_REQUEST, "action does not match this screen").into_response();
         }
-    }
+        // What the next page load names as its receipt: a single-select pick
+        // is a decision by itself, and a skip is one too. A multiselect answer
+        // is a *set* — the terminal message carries it, not this line.
+        match &input.action {
+            EventAction::Select { option_id } if !env.multiselect => env
+                .options
+                .iter()
+                .find(|option| &option.id == option_id)
+                .map(|option| option.label.clone()),
+            EventAction::Skip => Some("跳过".to_string()),
+            _ => None,
+        }
+    };
 
     let seq = inner.event_seq.fetch_add(1, Ordering::SeqCst) + 1;
     let event = input.into_event(seq, store::now_ms());
     if let Err(err) = inner.store.append_event(&event) {
         return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response();
+    }
+    if let Some(label) = receipt_label {
+        inner.state.write().unwrap().last_pick = Some(LastPick {
+            screen: event.screen,
+            label,
+        });
     }
     // A click is real user activity — resets the idle clock (pushes do too).
     inner

@@ -97,10 +97,32 @@ fn emphasis_lands_on_the_variants_own_node_only() {
     let first = html.split("data-choice=\"neon-purple\"").next().unwrap();
     let second = html.split("data-choice=\"neon-purple\"").nth(1).unwrap();
 
-    assert!(first.contains("m-hero m-emph"), "{first}");
-    assert!(!first.contains("m-button m-emph"), "{first}");
-    assert!(second.contains("m-button m-emph"), "{second}");
-    assert!(!second.contains("m-hero m-emph"), "{second}");
+    // hero/button are mapped kinds, so at color wide they are antd slots and
+    // the emphasis marker rides the slot element itself.
+    assert!(
+        first.contains("m-antd-slot m-emph\" data-antd-kind=\"hero\""),
+        "{first}"
+    );
+    assert!(
+        first.contains("m-antd-slot\" data-antd-kind=\"button\""),
+        "{first}"
+    );
+    assert!(
+        !first.contains("m-antd-slot m-emph\" data-antd-kind=\"button\""),
+        "{first}"
+    );
+    assert!(
+        second.contains("m-antd-slot m-emph\" data-antd-kind=\"button\""),
+        "{second}"
+    );
+    assert!(
+        second.contains("m-antd-slot\" data-antd-kind=\"hero\""),
+        "{second}"
+    );
+    assert!(
+        !second.contains("m-antd-slot m-emph\" data-antd-kind=\"hero\""),
+        "{second}"
+    );
 }
 
 #[test]
@@ -438,8 +460,11 @@ fn mobile_chrome_renders_its_shapes() {
 
 #[test]
 fn desktop_chrome_renders_its_shapes() {
+    // Greybox shapes on purpose: at color wide the mapped leaves (table/tree/
+    // dialog) island into antd faces, so their greybox markup is guarded here
+    // at wireframe fidelity instead.
     let spec = parse(json!({
-        "fidelity": "color",
+        "fidelity": "wireframe",
         "mock": {
             "kind": "rows",
             "children": [
@@ -533,6 +558,93 @@ fn unweighted_tracks_flex_by_child_role() {
     }));
     let html = render_spec(&spec, &options());
     assert!(html.contains("--ratio:auto minmax(0, 1fr) auto"), "{html}");
+    assert!(html.contains("--ratio:auto auto"), "{html}");
+}
+
+#[test]
+fn several_content_bands_hug_instead_of_equalizing() {
+    // Regression (session 20261023_41c0f4df): four unweighted content bands
+    // each took `minmax(0, 1fr)`, and equal fr rows in a content-sized grid
+    // all grow to the tallest band's content — the title line and KPI row
+    // rendered as tall as the data table, with the gap under every short
+    // band. Several content bands now hug; only a lone one fills.
+    let spec = parse(json!({
+        "fidelity": "color",
+        "mock": {
+            "kind": "frame",
+            "title": "运营中心",
+            "body": {
+                "kind": "rows",
+                "children": [
+                    {
+                        "kind": "cols",
+                        "children": [
+                            { "kind": "text", "text": "今日运营概览" },
+                            { "kind": "toolbar", "items": ["今天", "导出"] }
+                        ]
+                    },
+                    {
+                        "kind": "cols",
+                        "children": [
+                            { "kind": "kpi", "label": "GMV", "value": "¥128,640" },
+                            { "kind": "kpi", "label": "订单", "value": "3,482" }
+                        ]
+                    },
+                    {
+                        "kind": "cols",
+                        "children": [
+                            { "kind": "area", "label": "趋势" },
+                            { "kind": "bars", "items": [{ "label": "私域", "value": 58 }] }
+                        ]
+                    },
+                    {
+                        "kind": "table",
+                        "cols": ["渠道", "GMV"],
+                        "rows": [["信息流", "¥52,400"]]
+                    }
+                ]
+            }
+        },
+        "variants": [{ "id": "deep-blue" }]
+    }));
+    let html = render_spec(&spec, &options());
+    assert!(
+        html.contains("--ratio:auto auto auto auto"),
+        "content bands must hug, got: {html}"
+    );
+}
+
+#[test]
+fn compact_widgets_hug_their_band() {
+    // A 34px sparkline and a 74px ring are not bands — sharing a track with a
+    // KPI card stretched half the card's height into empty space.
+    let spec = parse(json!({
+        "fidelity": "wireframe",
+        "mock": {
+            "kind": "rows",
+            "children": [
+                {
+                    "kind": "rows",
+                    "children": [
+                        { "kind": "kpi", "label": "GMV", "value": "¥128,640" },
+                        { "kind": "sparkline", "shape": "up" }
+                    ]
+                },
+                {
+                    "kind": "rows",
+                    "children": [
+                        { "kind": "ring", "pct": 68, "label": "目标" },
+                        { "kind": "bars", "items": [{ "label": "私域", "value": 58 }] }
+                    ]
+                }
+            ]
+        },
+        "variants": [{ "id": "a" }]
+    }));
+    let html = render_spec(&spec, &options());
+    // The KPI card is the lone content band and keeps the fill track; the
+    // sparkline hugs. The ring/bars stack has no content band at all.
+    assert!(html.contains("--ratio:minmax(0, 1fr) auto"), "{html}");
     assert!(html.contains("--ratio:auto auto"), "{html}");
 }
 
@@ -747,4 +859,49 @@ fn phone_trees_keep_the_side_by_side_rail() {
     }));
     let html = render_spec(&spec, &options());
     assert!(!html.contains("m-variant-wide"), "{html}");
+}
+
+/// Decision A's fence: the two faces never leak into each other. Wireframe
+/// stays the greybox page it was (no slot, no theme payload), color wide
+/// islands, and a phone-root tree stays greybox even at color — antd-mobile is
+/// the mapping layer's next instance, not this one.
+#[test]
+fn the_two_faces_never_leak_into_each_other() {
+    let mapped = json!({
+        "kind": "rows",
+        "children": [
+            { "kind": "button", "text": "导出" },
+            { "kind": "kpi", "label": "收入", "value": "1" }
+        ]
+    });
+    let wireframe = render_spec(
+        &parse(json!({ "fidelity": "wireframe", "mock": mapped.clone() })),
+        &[],
+    );
+    assert!(!wireframe.contains("m-antd-slot"), "{wireframe}");
+    assert!(!wireframe.contains("data-antd"), "{wireframe}");
+    assert!(
+        wireframe.contains("m-kpi"),
+        "greybox still draws: {wireframe}"
+    );
+
+    let color = render_spec(
+        &parse(json!({ "fidelity": "color", "mock": mapped.clone() })),
+        &[],
+    );
+    assert!(color.contains("m-antd-slot"), "{color}");
+    assert!(color.contains("data-antd-theme"), "{color}");
+
+    let phone = render_spec(
+        &parse(json!({
+            "fidelity": "color",
+            "mock": { "kind": "phone_shell", "body": mapped }
+        })),
+        &[],
+    );
+    assert!(
+        !phone.contains("m-antd-slot"),
+        "phone roots stay greybox: {phone}"
+    );
+    assert!(phone.contains("m-kpi"), "{phone}");
 }

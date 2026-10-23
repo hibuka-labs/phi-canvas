@@ -18,6 +18,20 @@ pub const COMPARE_HTML: &str = include_str!("assets/compare.html");
 pub const COMPONENTS_CSS: &str = include_str!("assets/components.css");
 pub const HELPER_JS: &str = include_str!("assets/helper.js");
 pub const COMPARE_JS: &str = include_str!("assets/compare.js");
+/// The bundled React+antd island runtime (built from `runtime/`, version-pinned
+/// with the crate). Served only to pages whose body actually carries
+/// `m-antd-slot` islands — see [`scripts_for`].
+pub const ANTD_RUNTIME_JS: &str = include_str!("assets/antd-runtime.js");
+
+/// The runtime script tag when the page carries antd islands, else nothing —
+/// a wireframe page must stay exactly the page it was.
+pub fn scripts_for(has_islands: bool) -> &'static str {
+    if has_islands {
+        r#"<script src="/assets/antd-runtime.js"></script>"#
+    } else {
+        ""
+    }
+}
 
 /// One design screen in the session's version history (gate 2 ③). Interstitial
 /// screens are excluded before they get here: the rail is the design.
@@ -84,22 +98,38 @@ pub fn escape_html(text: &str) -> String {
 /// `versions` is the design history for the version rail (gate 2 ③). Passing
 /// fewer than two entries renders no rail — a one-screen session has nothing
 /// to look back at yet.
+///
+/// `live` is whether this screen is the one currently on offer. A historical
+/// version (the rail is for looking) renders its question as a record: no
+/// clickable options, no pick actions, and the helper leaves clicks alone.
+///
+/// `prior_pick` is what the user chose on an *earlier* screen. The page
+/// reloads on every screen change, so the click's highlight is gone with the
+/// old page — the receipt is rendered here so the next screen still says it.
 pub fn render_screen(
     env: &ScreenEnvelope,
     seq: u64,
     token: &str,
     versions: &[VersionEntry],
+    live: bool,
+    prior_pick: Option<&str>,
 ) -> String {
     let subtitle = match &env.subtitle {
         Some(text) => format!("<p class=\"subtitle\">{}</p>", escape_html(text)),
         None => String::new(),
     };
-    let indicator = if env.is_display_only() {
-        "展示中 · 回到终端继续讨论"
+    let indicator = if !live {
+        "查看中 · 选择请回到当前屏".to_string()
+    } else if env.is_display_only() {
+        "展示中 · 回到终端继续讨论".to_string()
     } else if env.multiselect {
-        "点选后按「确认」提交，或「跳过」"
+        "点选后按「确认」提交，或「跳过」".to_string()
     } else {
-        "点击选择，然后回到终端继续"
+        "点击选择，然后回到终端继续".to_string()
+    };
+    let indicator = match prior_pick {
+        Some(label) if live => format!("上一问已选：{} ✓ · {indicator}", escape_html(label)),
+        _ => indicator,
     };
 
     let (head, tail) = FRAME_HTML
@@ -108,17 +138,33 @@ pub fn render_screen(
     let vars = [
         ("TOKEN", token),
         ("SEQ", &seq.to_string()),
+        ("LIVE", if live { "1" } else { "0" }),
+        ("BODYCLASS", if live { "" } else { " class=\"view-only\"" }),
         ("VERSIONS", &render_versions(versions, seq)),
         ("TITLE", &escape_html(&env.title)),
         ("SUBTITLE", &subtitle),
         ("REFERENCE", &render_reference(env)),
-        ("OPTIONS", &render_options(env)),
-        ("INDICATOR", indicator),
+        ("OPTIONS", &render_options(env, live)),
+        ("INDICATOR", indicator.as_str()),
+        (
+            "SCRIPTS",
+            scripts_for(env.body_html.contains("m-antd-slot")),
+        ),
     ];
+    // A look-back keeps the record, not the affordance: every pick marker in
+    // the body (spec variant cards and `body_html` spatial picks alike) is
+    // renamed out of the clickable vocabulary. The helper also refuses to
+    // post on a not-live page, and the server only takes a choice for the
+    // screen on offer — three layers, this one is the visible one.
+    let body = if live {
+        env.body_html.clone()
+    } else {
+        env.body_html.replace("data-choice=\"", "data-view=\"")
+    };
     format!(
         "{}{}{}",
         fill_markers(head, &vars),
-        env.body_html,
+        body,
         fill_markers(tail, &vars)
     )
 }
@@ -208,7 +254,11 @@ fn render_reference(env: &ScreenEnvelope) -> String {
 /// Host-rendered options panel — the canonical click surface. `body_html` may
 /// also carry `data-choice="<id>"` for spatial picks, but the model is told
 /// not to duplicate this panel.
-fn render_options(env: &ScreenEnvelope) -> String {
+///
+/// On a screen that is not on offer (`live == false`) the same question is
+/// drawn as a record: no `data-choice`, no pick actions — a look back at what
+/// was asked is not a second chance to answer it.
+fn render_options(env: &ScreenEnvelope, live: bool) -> String {
     if env.is_display_only() {
         return String::new();
     }
@@ -224,18 +274,33 @@ fn render_options(env: &ScreenEnvelope) -> String {
             Some(text) => format!("<p>{}</p>", escape_html(text)),
             None => String::new(),
         };
+        let pick = if live {
+            format!(
+                " data-choice=\"{id}\" role=\"button\" tabindex=\"0\"",
+                id = escape_html(&option.id)
+            )
+        } else {
+            String::new()
+        };
         items.push_str(&format!(
-            r#"<div class="option" data-choice="{id}" role="button" tabindex="0">
+            r#"<div class="option"{pick}>
   <div class="letter">{letter}</div>
   <div class="content"><h3>{label}</h3>{note}</div>
 </div>"#,
-            id = escape_html(&option.id),
+            pick = pick,
             letter = letter,
             label = escape_html(&option.label),
             note = note,
         ));
     }
 
+    if !live {
+        return format!(
+            "<div class=\"options\" data-multiselect=\"{multi}\">\n{items}</div>",
+            multi = env.multiselect,
+            items = items
+        );
+    }
     let confirm = if env.multiselect {
         r#"<button class="btn" data-action="confirm">确认</button>"#
     } else {
@@ -252,7 +317,14 @@ fn render_options(env: &ScreenEnvelope) -> String {
 }
 
 /// A frame with a single notice card (empty canvas, farewell screens).
-pub fn render_notice(title: &str, message: &str, token: &str, seq: u64) -> String {
+///
+/// `live` is whether the page chases the current screen (helper.js reloads on
+/// a seq change only when the meta says live). The waiting notice must — the
+/// first push usually lands after the browser is already open, and a page
+/// that does not chase leaves the user staring at "等待第一屏" while the
+/// terminal insists the screen is up. Farewells and the compare stub are ends
+/// in themselves: reloading them would only reset the view.
+pub fn render_notice(title: &str, message: &str, token: &str, seq: u64, live: bool) -> String {
     let (head, tail) = FRAME_HTML
         .split_once("{{BODY}}")
         .expect("frame template must contain a {{BODY}} marker");
@@ -264,12 +336,15 @@ pub fn render_notice(title: &str, message: &str, token: &str, seq: u64) -> Strin
     let vars = [
         ("TOKEN", token),
         ("SEQ", &seq.to_string()),
+        ("LIVE", if live { "1" } else { "0" }),
+        ("BODYCLASS", " class=\"view-only\""),
         ("VERSIONS", ""),
         ("TITLE", &escape_html(title)),
         ("SUBTITLE", ""),
         ("REFERENCE", ""),
         ("OPTIONS", ""),
         ("INDICATOR", "回到终端继续讨论"),
+        ("SCRIPTS", ""),
     ];
     format!(
         "{}{}{}",
@@ -294,12 +369,15 @@ pub fn render_compare(
         CompareMode::SideBySide => side_by_side(before, after),
         CompareMode::Wipe => wipe_over(before, after),
     };
-    let vars: [(&str, &str); 5] = [
+    let islands =
+        before.1.body_html.contains("m-antd-slot") || after.1.body_html.contains("m-antd-slot");
+    let vars: [(&str, &str); 6] = [
         ("PICK_A", &picker(versions, before.0)),
         ("PICK_B", &picker(versions, after.0)),
         ("MODES", &mode_links(before.0, after.0, mode)),
         ("DIFF", &render_changes(before.1, after.1)),
         ("COMPARE", &stage),
+        ("SCRIPTS", scripts_for(islands)),
     ];
     fill_markers(COMPARE_HTML, &vars)
 }

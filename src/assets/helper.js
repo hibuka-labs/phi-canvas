@@ -11,8 +11,12 @@
 
   var tokenEl = document.querySelector('meta[name="canvas-token"]');
   var seqEl = document.querySelector('meta[name="canvas-seq"]');
+  var liveEl = document.querySelector('meta[name="canvas-live"]');
   var token = tokenEl ? tokenEl.getAttribute("content") : "";
   var seq = seqEl ? parseInt(seqEl.getAttribute("content"), 10) || 0 : 0;
+  // A page that is not the screen on offer (a historical version, a notice)
+  // is for looking: it neither chases the current screen nor reports clicks.
+  var live = !liveEl || liveEl.getAttribute("content") !== "0";
   var failures = 0;
   var POLL_MS = 2000;
   var FAIL_LIMIT = 3;
@@ -52,7 +56,7 @@
       .then(function (state) {
         failures = 0;
         showConnected();
-        if (typeof state.seq === "number" && state.seq !== seq) {
+        if (live && typeof state.seq === "number" && state.seq !== seq) {
           window.location.reload();
         }
       })
@@ -116,6 +120,7 @@
   }
 
   document.addEventListener("click", function (event) {
+    if (!live) return;
     var target = event.target;
     if (!(target instanceof Element)) return;
 

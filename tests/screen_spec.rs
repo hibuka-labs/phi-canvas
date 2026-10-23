@@ -601,17 +601,22 @@ fn notice_is_length_capped() {
 }
 
 #[test]
-fn a_stringified_screen_still_parses() {
+fn a_stringified_screen_is_rejected_even_when_valid() {
     // Observed on the live push path: the whole `screen` object arrived as one
-    // JSON string. Unwrapping is free; rejecting it spends a push round saying
-    // what the model already said.
+    // JSON string. Accepting the parseable ones is what kept the model
+    // stringifying (session 20261022_bb8c2dc3: five broken copies in a row
+    // after a string had once been accepted). Reject every string and teach
+    // the structural fix — `screen_file`.
     let inner = json!({
         "fidelity": "wireframe",
         "mock": { "kind": "text", "text": "hi" }
     });
     let wrapped = Value::String(inner.to_string());
-    let spec = ScreenSpec::parse(&wrapped).expect("double-encoded screen");
-    assert_eq!(spec.fidelity, Fidelity::Wireframe);
+    let err = ScreenSpec::parse(&wrapped).unwrap_err();
+    assert!(matches!(err, SpecError::Stringified), "{err}");
+    let msg = format!("{err}");
+    assert!(msg.contains("screen_file"), "{msg}");
+    assert!(msg.contains("stringified"), "{msg}");
 }
 
 #[test]
@@ -640,7 +645,7 @@ fn a_stringified_non_object_names_the_type() {
     let err = ScreenSpec::parse(&Value::String("[1, 2]".into())).unwrap_err();
     let msg = format!("{err}");
     assert!(msg.contains("a JSON array"), "{msg}");
-    assert!(msg.contains("never stringified"), "{msg}");
+    assert!(msg.contains("screen_file"), "{msg}");
 }
 
 #[test]
@@ -659,4 +664,28 @@ fn a_broken_stringified_screen_with_cjk_still_points_at_the_break() {
         msg.contains("卡片") || msg.contains("mock"),
         "the excerpt should still show the fumble region: {msg}"
     );
+}
+
+#[test]
+fn a_node_in_a_string_items_slot_says_where_it_belongs() {
+    // The live fumble, twice, on the push path: a control node inside
+    // `toolbar.items`. The rejection must teach — what the slot takes, which
+    // node landed there, where that node belongs — not echo serde's type
+    // mismatch.
+    let err = parse(json!({
+        "fidelity": "wireframe",
+        "mock": {
+            "kind": "toolbar",
+            "items": [
+                { "kind": "segment", "items": ["本周", "本月"], "active": 0 },
+                { "kind": "button", "text": "新建工单" }
+            ]
+        }
+    }))
+    .unwrap_err();
+    let msg = format!("{err}");
+    assert!(msg.contains("items[0]"), "{msg}");
+    assert!(msg.contains("`segment` node"), "{msg}");
+    assert!(msg.contains("label strings"), "{msg}");
+    assert!(msg.contains("cols"), "{msg}");
 }

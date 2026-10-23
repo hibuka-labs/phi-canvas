@@ -74,6 +74,18 @@ pub enum ToolCallError {
     Spec(#[from] SpecError),
 }
 
+/// One `canvas_push` result: the locked M3 tool text plus whether the screen
+/// is waiting on the user. The host folds `awaiting_selection` into the run
+/// state (`ToolContext::mark_waiting_for_human`) so the guard knows the run
+/// parked on a human step instead of an unfinished task.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PushOutcome {
+    pub text: String,
+    /// The screen asks a question (interactive options or a multiselect
+    /// confirm) and the pick is the next input. False for display-only.
+    pub awaiting_selection: bool,
+}
+
 struct ToolState {
     canvas: Option<Arc<Canvas>>,
     decision: LaunchDecision,
@@ -163,7 +175,7 @@ impl CanvasTools {
 
     /// `canvas_push`: parse the M3 envelope and show one screen. Implicitly
     /// opens (binds only — never launches) when no live canvas exists.
-    pub async fn push(&self, args: &Value) -> Result<String, ToolCallError> {
+    pub async fn push(&self, args: &Value) -> Result<PushOutcome, ToolCallError> {
         let mut env = ScreenEnvelope::parse(args)?;
         // Spec screens render host-side into the body slot; `body_html` stays
         // the escape hatch. When the model sends both, the spec wins and the
@@ -181,6 +193,7 @@ impl CanvasTools {
             .expect("live canvas ensured above")
             .clone();
         let receipt = canvas.push(env).await?;
+        let awaiting_selection = !receipt.display_only;
         let mut text = if receipt.display_only {
             text_display_only(&receipt.url, &receipt.title)
         } else {
@@ -189,7 +202,10 @@ impl CanvasTools {
         if both {
             text.push_str(TEXT_SPEC_OVER_HTML);
         }
-        Ok(text)
+        Ok(PushOutcome {
+            text,
+            awaiting_selection,
+        })
     }
 
     /// `canvas_close`: graceful close, idempotent (M1/M3).
@@ -258,7 +274,8 @@ pub fn tool_descriptors() -> Vec<ToolDescriptor> {
                 (`id` echoed back on click, `label` shown); `options: []` makes it a \
                 display-only screen; `multiselect: true` adds confirm/skip instead of \
                 single-select. Describe the picture with `screen` (structured mock + theme \
-                tokens — preferred) or `body_html` (raw HTML escape hatch), never both. \
+                tokens — preferred, write it to a file and pass `screen_file` when it is \
+                large) or `body_html` (raw HTML escape hatch), never both. \
                 `reference` pins one PNG beside the candidates when the user pointed at \
                 something to match. Each push is kept as a version the user can look back \
                 at and compare (side by side or a wipe slider) — number it in the title \
@@ -327,7 +344,8 @@ pub fn tool_descriptors() -> Vec<ToolDescriptor> {
                     "screen": {
                         "type": "object",
                         "description": "Structured screen (preferred — send it as a real JSON object in the \
-                            arguments, never as a stringified copy). Shape: \
+                            arguments; a stringified copy is rejected). Too big for the call? Write the \
+                            screen JSON to a file and pass its path as `screen_file`. Shape: \
                             {fidelity: 'wireframe'|'color'|'texture', mock?: <node>, notice?: string, \
                             variants?: [{id, mock?: <node>, theme?: <tokens>, emph?: [node_id], content?: {node_id: text}}]}. \
                             `variants[].id` must match an `options[].id`; the shared `mock` is reused \
@@ -343,11 +361,20 @@ pub fn tool_descriptors() -> Vec<ToolDescriptor> {
                             `w`/`h` percentages (number or string, `18` = `18%`; in a `cols`/`rows` band \
                             the share becomes the child's track), `phone_shell`/`dialog` take a nested `body` node, \
                             `tabbar`/`segment` take `items` + optional `active` index. \
+                            Every `items` slot takes label strings only — a control node \
+                            there is rejected; it belongs beside the strip in `cols`/`rows`. \
                             Theme tokens: bg, panel, border, accent, accent2, text, text_bright; \
                             texture knobs (fidelity 'texture' only): surface 'glass'|'matte'|'metal', frost 1-3, \
                             elevation 1-3, edge 1-3, glow 0-2. No CSS and no style fields anywhere — \
                             structure + tokens only. `fidelity` follows the question being asked: \
                             layout = wireframe, styling = color, material/finish = texture."
+                    },
+                    "screen_file": {
+                        "type": "string",
+                        "description": "Path to a JSON file holding the screen object — the way to send a \
+                            large `screen` whole instead of hand-compressing it into the call. The file \
+                            must contain the object itself (exactly what `screen` takes), not a stringified \
+                            copy. Alternative to `screen`; sending both is rejected."
                     },
                     "multiselect": {
                         "type": "boolean",

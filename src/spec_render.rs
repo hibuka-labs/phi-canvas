@@ -34,14 +34,16 @@ pub fn render_spec(spec: &ScreenSpec, options: &[OptionItem]) -> String {
             let theme = Theme::default();
             let emph = HashSet::new();
             let content = BTreeMap::new();
+            let antd = antd_path(spec.fidelity, Some(tree));
             let ctx = RenderCtx {
                 theme: &theme,
                 content: &content,
                 emph: &emph,
+                antd,
             };
             out.push_str(&format!(
                 "<div class=\"m-variant\"{}>{}</div>",
-                style_attr(&theme_vars(spec.fidelity, &theme)),
+                card_attrs(spec.fidelity, &theme, antd),
                 render_node(tree, &ctx, None)
             ));
         }
@@ -67,10 +69,12 @@ fn render_variant(spec: &ScreenSpec, variant: &Variant, options: &[OptionItem]) 
     let theme = variant.theme.as_ref().unwrap_or(&fallback);
     let tree = variant.mock.as_ref().or(spec.mock.as_ref());
     let emph: HashSet<String> = variant.emph.iter().cloned().collect();
+    let antd = antd_path(spec.fidelity, tree);
     let ctx = RenderCtx {
         theme,
         content: &variant.content,
         emph: &emph,
+        antd,
     };
     let caption = caption_for(variant, options);
     // Only the host-rendered options panel is the canonical pick surface; the
@@ -110,7 +114,7 @@ fn render_variant(spec: &ScreenSpec, variant: &Variant, options: &[OptionItem]) 
     };
     format!(
         "<div class=\"m-variant{wide}{surface}\"{pick}{}><div class=\"m-variant-cap\">{caption}</div>{body}</div>",
-        style_attr(&theme_vars(spec.fidelity, theme)),
+        card_attrs(spec.fidelity, theme, antd),
     )
 }
 
@@ -133,6 +137,46 @@ struct RenderCtx<'a> {
     theme: &'a Theme,
     content: &'a BTreeMap<String, String>,
     emph: &'a HashSet<String>,
+    /// The antd face is on (see [`antd_path`]) — mapped leaves render as
+    /// hydrate slots instead of `m-*` markup.
+    antd: bool,
+}
+
+/// Decision A (dual track): the antd face is for the finished look —
+/// `color`/`texture` on a PC-web form. A layout question (`wireframe`) keeps
+/// the greyscale mock so the shape is judged without the library's polish,
+/// and a phone form keeps the greybox face (antd-mobile is the mapping
+/// layer's next instance). Only the root decides the form (see [`wide_form`]).
+fn antd_path(fidelity: Fidelity, tree: Option<&MockNode>) -> bool {
+    fidelity != Fidelity::Wireframe && wide_form(tree)
+}
+
+/// Card-level attributes: theme custom properties for the greybox face, plus
+/// the theme JSON the antd runtime reads for `ConfigProvider` (one per card,
+/// so two candidates stay two independent palettes in both renderers).
+fn card_attrs(fidelity: Fidelity, theme: &Theme, antd: bool) -> String {
+    let mut attrs = style_attr(&theme_vars(fidelity, theme));
+    if antd {
+        let json = serde_json::to_string(theme).unwrap_or_default();
+        attrs.push_str(&format!(" data-antd-theme='{}'", escape_attr(&json)));
+    }
+    attrs
+}
+
+/// Attribute value inside single quotes: JSON's `"` stays literal (readable
+/// markup, greppable tests), the four characters that could break out go.
+fn escape_attr(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '\'' => out.push_str("&#39;"),
+            _ => out.push(ch),
+        }
+    }
+    out
 }
 
 fn fidelity_class(fidelity: Fidelity) -> &'static str {
@@ -211,6 +255,12 @@ enum TrackAxis {
 }
 
 fn render_node(node: &MockNode, ctx: &RenderCtx, track_share: Option<TrackAxis>) -> String {
+    // A mapped leaf on the antd path becomes a hydrate slot; everything else
+    // stays the `m-*` markup below (shape is the vocabulary's, face is the
+    // library's — see `crate::antd_map`).
+    if let Some(slot) = antd_slot(node, ctx) {
+        return slot;
+    }
     let override_text = node_id(node).and_then(|id| ctx.content.get(id)).cloned();
     let emph = node_id(node)
         .map(|id| ctx.emph.contains(id))
@@ -687,24 +737,40 @@ fn join_picked(items: &[String], active: Option<u8>, base: &str, on: &str, lead:
         .join("")
 }
 
+/// The unweighted "content band" track — one per band at most (see
+/// [`ratio_vars`]). Equal tracks for everything was how a phone shell became
+/// three giant bands — topbar, list and tabbar at a third each — which is the
+/// layout that sent the model escaping to `body_html` with `escape:
+/// "phone-frame"`.
+const FILL_TRACK: &str = "minmax(0, 1fr)";
+
 /// `ratio` weights become grid tracks. Without weights the tracks follow the
-/// children: chrome and leaf controls hug their content, containers and data
-/// widgets take an equal share of what is left. Equal tracks for everything
-/// was how a phone shell became three giant bands — topbar, list and tabbar at
-/// a third each — which is the layout that sent the model escaping to
-/// `body_html` with `escape: "phone-frame"`.
+/// children: chrome, controls and compact widgets hug their content, and a
+/// single content band fills what is left.
 fn ratio_vars(
     ratio: &[String],
     children: &[MockNode],
     vertical: bool,
 ) -> Vec<(&'static str, String)> {
     if ratio.is_empty() {
-        let tracks = children
+        let mut tracks = children
             .iter()
             .map(|child| track_of(child, vertical))
-            .collect::<Vec<_>>()
-            .join(" ");
-        return vec![("ratio", tracks)];
+            .collect::<Vec<_>>();
+        // Several content bands in one `rows` stack all hug. Equal `1fr` rows
+        // in a content-sized grid do not "share what is left" — they all grow
+        // to the tallest band's content (the table band made nav and title
+        // bands table-tall; session 20261023_41c0f4df). The lone content band
+        // keeps the fill track so a fixed-height shell (phone) is still
+        // absorbed by the content, not left with a gap under the chrome.
+        if vertical && tracks.iter().filter(|t| t.as_str() == FILL_TRACK).count() > 1 {
+            for track in &mut tracks {
+                if track == FILL_TRACK {
+                    *track = "auto".to_string();
+                }
+            }
+        }
+        return vec![("ratio", tracks.join(" "))];
     }
     // `minmax(0, Nfr)` rather than plain `Nfr`: a bare `fr` track carries an
     // implicit `min-content` floor, so three switch tiles could not shrink
@@ -726,9 +792,10 @@ fn ratio_vars(
 /// silently does nothing.
 ///
 /// Otherwise `vertical` is the band's own axis: in a `rows` stack the track is
-/// height, where chrome and row-shaped leaves take what they need; in a `cols`
-/// band it is width, where only side panels hug — a control that hugs its
-/// column shrinks to one CJK character per line.
+/// height, where chrome, controls and compact widgets (a 34px sparkline does
+/// not become a band) take what they need; in a `cols` band it is width, where
+/// only side panels hug — a control that hugs its column shrinks to one CJK
+/// character per line.
 fn track_of(node: &MockNode, vertical: bool) -> String {
     let share = match node {
         MockNode::Region { w, h, .. } => {
@@ -756,12 +823,16 @@ fn track_of(node: &MockNode, vertical: bool) -> String {
         | MockNode::Input { .. }
         | MockNode::Button { .. }
         | MockNode::Swatches { .. }
-        | MockNode::Hero { .. } => vertical,
-        // Layout containers and data widgets: they are the content, and split
-        // what is left evenly when nobody weighted them.
+        | MockNode::Hero { .. }
+        | MockNode::Sparkline { .. }
+        | MockNode::Ring { .. }
+        | MockNode::Bars { .. } => vertical,
+        // Layout containers and data widgets: they are the content — the one
+        // band that fills a fixed-height shell when the stack has just one of
+        // them (see `ratio_vars` for the several-content case).
         _ => false,
     };
-    String::from(if hug { "auto" } else { "minmax(0, 1fr)" })
+    String::from(if hug { "auto" } else { FILL_TRACK })
 }
 
 /// `NN%` / `NN` / `N.N` → a percentage the stylesheet can use as a size.
@@ -769,6 +840,146 @@ fn proportion(value: &str) -> String {
     let trimmed = value.trim();
     let number = trimmed.strip_suffix('%').unwrap_or(trimmed);
     format!("{number}%")
+}
+
+/// The wire kind name (`box`, not `Region`) — read from the same serde tag the
+/// parser used, so the two can never drift.
+fn node_kind(node: &MockNode) -> Option<String> {
+    serde_json::to_value(node)
+        .ok()?
+        .get("kind")?
+        .as_str()
+        .map(str::to_string)
+}
+
+/// One antd island: the div the bundled runtime hydrates (`runtime/src/main.jsx`
+/// mounts every `.m-antd-slot[data-antd]`). The payload is the binding table's
+/// component name plus resolved props — the JS adapter never sees the mock
+/// schema, and the layout tree never sees the library. `None` means greybox.
+fn antd_slot(node: &MockNode, ctx: &RenderCtx) -> Option<String> {
+    if !ctx.antd {
+        return None;
+    }
+    let kind = node_kind(node)?;
+    let component = crate::antd_map::component_for(&kind)?;
+    let props = slot_props(node, ctx)?;
+    let emph = node_id(node)
+        .map(|id| ctx.emph.contains(id))
+        .unwrap_or(false);
+    let payload = serde_json::json!({
+        "kind": kind,
+        "component": component,
+        "props": props,
+        "emph": emph,
+    });
+    let class = if emph {
+        "m-antd-slot m-emph"
+    } else {
+        "m-antd-slot"
+    };
+    Some(format!(
+        "<div class=\"{class}\" data-antd-kind=\"{kind}\" data-antd='{}'></div>",
+        escape_attr(&payload.to_string()),
+    ))
+}
+
+/// Recipe input for one island: the node's fields with `content` overrides
+/// applied exactly where the greybox renderer applies them (the primary copy
+/// slot), so the two faces never disagree on what the user meant to say.
+/// `None` when the node's shape has no honest island form (a `dialog` carrying
+/// a nested body node — the body is mock structure, not card content).
+fn slot_props(node: &MockNode, ctx: &RenderCtx) -> Option<serde_json::Value> {
+    use serde_json::json;
+
+    let override_text = node_id(node).and_then(|id| ctx.content.get(id)).cloned();
+    let text_of = |own: &str| override_text.clone().unwrap_or_else(|| own.to_string());
+    Some(match node {
+        MockNode::Input { text, .. } | MockNode::Button { text, .. } => json!({
+            "text": text.as_deref().map(text_of),
+        }),
+        MockNode::Nav { items, .. }
+        | MockNode::Sidebar { items, .. }
+        | MockNode::Toolbar { items, .. } => json!({
+            "items": items,
+        }),
+        MockNode::Kpi {
+            label,
+            value,
+            delta,
+            ..
+        } => json!({
+            "label": label,
+            "value": text_of(value),
+            "delta": delta,
+        }),
+        MockNode::Hero { text, .. } => json!({
+            "text": text_of(text),
+        }),
+        MockNode::Ring { pct, label, .. } => json!({
+            "pct": pct,
+            "label": label.as_deref().map(text_of),
+        }),
+        MockNode::Bars { items, .. } => json!({
+            "items": items
+                .iter()
+                .map(|item| json!({ "label": item.label, "value": item.value }))
+                .collect::<Vec<_>>(),
+        }),
+        MockNode::Dialog {
+            title,
+            text,
+            body,
+            actions,
+            ..
+        } => {
+            if body.is_some() {
+                return None;
+            }
+            // Greybox semantics: the message is the primary slot; the title is
+            // rewritten only when there is no message to carry the override.
+            json!({
+                "title": if text.is_some() { title.clone() } else { text_of(title) },
+                "text": text.as_deref().map(text_of),
+                "actions": actions,
+            })
+        }
+        MockNode::ListRow {
+            title,
+            note,
+            meta,
+            chevron,
+            avatar,
+            ..
+        } => json!({
+            "title": text_of(title),
+            "note": note,
+            "meta": meta,
+            "chevron": chevron,
+            "avatar": avatar,
+        }),
+        MockNode::Switch { label, on, .. } => json!({
+            "label": label.as_deref().map(text_of),
+            "on": on,
+        }),
+        MockNode::Segment { items, active, .. } => json!({
+            "items": items,
+            "active": active,
+        }),
+        MockNode::Table { cols, rows, .. } => json!({
+            "cols": cols,
+            "rows": rows,
+        }),
+        MockNode::Tree { items, .. } => json!({
+            "items": items
+                .iter()
+                .map(|item| json!({ "label": item.label, "depth": item.depth }))
+                .collect::<Vec<_>>(),
+        }),
+        // Mapped kinds only reach this function (`antd_slot` looks the kind
+        // up first); a new map entry without a recipe arm falls back to
+        // greybox rather than rendering a hollow island.
+        _ => return None,
+    })
 }
 
 pub fn node_id(node: &MockNode) -> Option<&str> {

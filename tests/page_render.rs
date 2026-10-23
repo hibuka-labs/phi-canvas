@@ -4,7 +4,7 @@
 
 mod common;
 
-use common::{body_of, get, send};
+use common::{body_of, get, post_json, send};
 use phi_canvas::{Canvas, CanvasConfig, CloseReason, ScreenEnvelope};
 use serde_json::json;
 
@@ -235,13 +235,85 @@ async fn poll_reports_state_for_heartbeat_and_reload() {
 }
 
 #[tokio::test]
+async fn the_next_screen_shows_a_receipt_of_the_pick() {
+    // The helper reloads the page on every screen change, so the click's own
+    // highlight dies with the old page. The receipt is server-rendered so the
+    // next screen still answers "what did I pick?".
+    let tmp = tempfile::tempdir().unwrap();
+    let canvas = open_canvas(&tmp).await;
+    let first = canvas.push(options_screen()).await.unwrap();
+    let port = canvas.port();
+
+    let body = format!(
+        r#"{{"type":"select","screen":{},"option_id":"a"}}"#,
+        first.screen
+    );
+    let request = post_json(port, "/events", canvas.session_token(), &body);
+    let (status, _) = send(port, &request).await;
+    assert_eq!(status, 204, "click accepted");
+
+    // The pick's own screen keeps its question clean — the receipt is about
+    // the *previous* answer, so it only appears on the screen after.
+    let (_, response) = send(port, &get(port, "/")).await;
+    assert!(
+        !body_of(&response).contains("上一问已选"),
+        "no receipt on the screen that was just answered"
+    );
+
+    canvas.push(options_screen()).await.unwrap();
+    let (_, response) = send(port, &get(port, "/")).await;
+    let body = body_of(&response);
+    assert!(
+        body.contains("上一问已选：侧边栏导航"),
+        "the pick survives the page turn: {body}"
+    );
+
+    canvas.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_skip_receipt_says_skip() {
+    let tmp = tempfile::tempdir().unwrap();
+    let canvas = open_canvas(&tmp).await;
+    let first = canvas.push(options_screen()).await.unwrap();
+    let port = canvas.port();
+
+    let body = format!(r#"{{"type":"skip","screen":{}}}"#, first.screen);
+    let request = post_json(port, "/events", canvas.session_token(), &body);
+    let (status, _) = send(port, &request).await;
+    assert_eq!(status, 204, "skip accepted");
+
+    canvas.push(options_screen()).await.unwrap();
+    let (_, response) = send(port, &get(port, "/")).await;
+    assert!(
+        body_of(&response).contains("上一问已选：跳过"),
+        "a skip is named as 跳过"
+    );
+
+    canvas.shutdown().await;
+}
+
+#[tokio::test]
 async fn empty_canvas_shows_waiting_page() {
     let tmp = tempfile::tempdir().unwrap();
     let canvas = open_canvas(&tmp).await;
 
     let (status, response) = send(canvas.port(), &get(canvas.port(), "/")).await;
     assert_eq!(status, 200);
-    assert!(body_of(&response).contains("等待第一屏"));
+    let body = body_of(&response);
+    assert!(body.contains("等待第一屏"));
+    // The page promises the first screen "会自动出现在这里" — so it must chase
+    // the current screen. Live marks the page as one helper.js reloads on a
+    // seq change; a waiting page marked look-only never picked up the push
+    // that landed after the browser opened (it needed Ctrl+B to change).
+    assert!(
+        body.contains("canvas-live\" content=\"1"),
+        "the waiting page chases the first screen"
+    );
+    assert!(
+        body.contains("/assets/helper.js"),
+        "the poller that does the chasing is on the page"
+    );
 
     canvas.shutdown().await;
 }
@@ -255,7 +327,13 @@ async fn close_renders_farewell_page() {
 
     let (status, response) = send(canvas.port(), &get(canvas.port(), "/")).await;
     assert_eq!(status, 200, "graceful close keeps serving the last screen");
-    assert!(body_of(&response).contains("画布已关闭"));
+    let body = body_of(&response);
+    assert!(body.contains("画布已关闭"));
+    // A farewell is the end of the road — nothing to chase.
+    assert!(
+        body.contains("canvas-live\" content=\"0"),
+        "the farewell page does not chase"
+    );
 
     canvas.shutdown().await;
 }
@@ -481,6 +559,119 @@ async fn the_reference_route_serves_the_copied_bytes_and_nothing_else() {
     // No copy for that seq → 404, not a walk of the filesystem.
     let (status, _) = send(port, &common::get(port, "/screens/999/reference")).await;
     assert_eq!(status, 404);
+
+    canvas.shutdown().await;
+}
+
+/// The antd island runtime is a per-page guest: a body carrying `m-antd-slot`
+/// loads it (and the asset is served), a greybox body never sees the script —
+/// a wireframe page must stay exactly the page it was.
+#[tokio::test]
+async fn island_pages_load_the_runtime_and_greybox_pages_do_not() {
+    let tmp = tempfile::tempdir().unwrap();
+    let canvas = open_canvas(&tmp).await;
+
+    let islands = ScreenEnvelope::parse(&json!({
+        "title": "上色",
+        "options": [{ "id": "a", "label": "方案 A" }],
+        "body_html": "<div class=\"m-antd-slot\" data-antd-kind=\"button\" data-antd='{}'></div>"
+    }))
+    .unwrap();
+    canvas.push(islands).await.unwrap();
+    let port = canvas.port();
+
+    let (_, response) = send(port, &get(port, "/")).await;
+    assert!(
+        body_of(&response).contains("/assets/antd-runtime.js"),
+        "island body pulls the runtime: {}",
+        body_of(&response)
+    );
+
+    let (status, asset) = send(port, &get(port, "/assets/antd-runtime.js")).await;
+    assert_eq!(status, 200);
+    let js = body_of(&asset);
+    assert!(
+        js.len() > 100_000,
+        "the bundled runtime is the real bundle: {} bytes",
+        js.len()
+    );
+
+    let greybox = ScreenEnvelope::parse(&json!({
+        "title": "线框",
+        "options": [{ "id": "a", "label": "方案 A" }],
+        "body_html": "<div class=\"m-kpi\">收入</div>"
+    }))
+    .unwrap();
+    canvas.push(greybox).await.unwrap();
+
+    let (_, response) = send(port, &get(port, "/")).await;
+    let body = body_of(&response);
+    assert!(
+        !body.contains("antd-runtime.js"),
+        "greybox body must not pull the runtime: {body}"
+    );
+
+    canvas.shutdown().await;
+}
+
+/// Viewing mode (M4): a historical version shows what was asked, not a
+/// second chance to answer it — the question is drawn as a record (no
+/// `data-choice` anywhere — including the body's own pick markers, which is
+/// what spec variant cards carry) and the page is marked not-live so the
+/// helper neither posts clicks nor chases the current screen.
+#[tokio::test]
+async fn a_historical_version_renders_as_a_record_not_a_pick_screen() {
+    let tmp = tempfile::tempdir().unwrap();
+    let canvas = open_canvas(&tmp).await;
+    // The body carries its own pick markers, like a spec's variant cards do.
+    let spatial = ScreenEnvelope::parse(&json!({
+        "title": "大屏顶部导航，哪个布局更专业？",
+        "options": [{ "id": "a", "label": "侧边栏导航" }, { "id": "b", "label": "顶部横向导航" }],
+        "body_html": "<div class=\"cards\"><div class=\"card\" data-choice=\"a\">A</div><div class=\"card\" data-choice=\"b\">B</div></div>"
+    }))
+    .unwrap();
+    let first = canvas.push(spatial).await.unwrap();
+    canvas.push(options_screen()).await.unwrap();
+    let port = canvas.port();
+
+    let (_, response) = send(port, &get(port, &format!("/screens/{}", first.screen))).await;
+    let body = body_of(&response);
+    assert!(
+        body.contains("大屏顶部导航，哪个布局更专业？"),
+        "the question is still on the page: {body}"
+    );
+    assert!(
+        !body.contains("data-choice"),
+        "a record is not clickable — body pick markers included: {body}"
+    );
+    assert!(
+        body.contains("data-view=\"a\""),
+        "the marker is renamed, not deleted: {body}"
+    );
+    assert!(
+        !body.contains("data-action=\"skip\""),
+        "no pick actions on a look-back: {body}"
+    );
+    assert!(
+        body.contains("canvas-live\" content=\"0"),
+        "the helper must see a not-live page: {body}"
+    );
+    assert!(
+        body.contains("<body class=\"view-only\">"),
+        "and the page wears the record face: {body}"
+    );
+    assert!(body.contains("查看中"), "the indicator says so: {body}");
+
+    let (_, response) = send(port, &get(port, "/")).await;
+    let body = body_of(&response);
+    assert!(
+        body.contains("data-choice=\"a\""),
+        "the screen on offer is still clickable: {body}"
+    );
+    assert!(
+        body.contains("canvas-live\" content=\"1"),
+        "and marked live: {body}"
+    );
 
     canvas.shutdown().await;
 }

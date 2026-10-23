@@ -5,10 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="canvas-token" content="{{TOKEN}}">
   <meta name="canvas-seq" content="{{SEQ}}">
+  <meta name="canvas-live" content="{{LIVE}}">
   <title>设计画布 · {{TITLE}}</title>
   <link rel="stylesheet" href="/assets/components.css">
 </head>
-<body>
+<body{{BODYCLASS}}>
   <div class="header">
     <h1>设计画布</h1>
     <div class="status" id="conn-status">已连接</div>
@@ -29,6 +30,6 @@
     <span id="indicator-text">{{INDICATOR}}</span>
   </div>
 
-  <script src="/assets/helper.js"></script>
+  <script src="/assets/helper.js"></script>{{SCRIPTS}}
 </body>
 </html>

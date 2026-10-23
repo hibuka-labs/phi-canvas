@@ -11,6 +11,7 @@
 //! - Product semantics live in the host: click mailbox + message synthesis,
 //!   consent gate, browser launch policy, status bar, waiting screens.
 
+pub mod antd_map;
 pub mod assets;
 pub mod envelope;
 pub mod event;
@@ -32,6 +33,6 @@ pub use spec_render::render_spec;
 pub use store::{CanvasStore, ServerInfo, StoreError};
 pub use token::SessionToken;
 pub use tools::{
-    BrowserLauncher, CanvasTools, LaunchDecision, TEXT_CLOSED, TEXT_SPEC_OVER_HTML, ToolCallError,
-    ToolDescriptor, tool_descriptors,
+    BrowserLauncher, CanvasTools, LaunchDecision, PushOutcome, TEXT_CLOSED, TEXT_SPEC_OVER_HTML,
+    ToolCallError, ToolDescriptor, tool_descriptors,
 };
