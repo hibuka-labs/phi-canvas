@@ -466,14 +466,15 @@ fn render_node(node: &MockNode, ctx: &RenderCtx, track_share: Option<TrackAxis>)
             let max = items
                 .iter()
                 .filter_map(|item| item.value)
-                .max()
-                .unwrap_or(0);
+                .fold(0.0_f64, f64::max);
             let rows = items
                 .iter()
                 .map(|item| {
+                    // `--w` is a percent number the stylesheet multiplies back
+                    // (see `.m-bar::before`); rounding is plenty for a width.
                     let width = match (item.value, max) {
-                        (Some(value), max) if max > 0 => {
-                            format!(" style=\"--w:{}\"", value.saturating_mul(100) / max)
+                        (Some(value), max) if max > 0.0 => {
+                            format!(" style=\"--w:{}\"", (value / max * 100.0).round())
                         }
                         _ => String::new(),
                     };

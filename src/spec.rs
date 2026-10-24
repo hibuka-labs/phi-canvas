@@ -163,6 +163,84 @@ where
     deserializer.deserialize_any(ProportionVisitor)
 }
 
+/// A bar magnitude: `3`, `3.5`, `"3.5"`, and `"42%"` all mean the same number.
+/// Rankings are scored with decimals and percents (same writing accident as
+/// `ratio` weights and `h` shares — observed live); rejecting the decimal
+/// costs a whole push round to retype what they already meant.
+fn de_opt_number<'de, D>(deserializer: D) -> Result<Option<f64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct NumberVisitor;
+
+    impl<'de> serde::de::Visitor<'de> for NumberVisitor {
+        type Value = Option<f64>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("a bar value (number or numeric string, like 3.5 or \"42%\")")
+        }
+
+        fn visit_unit<E>(self) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(None)
+        }
+
+        fn visit_none<E>(self) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(None)
+        }
+
+        fn visit_some<D2>(self, deserializer: D2) -> Result<Self::Value, D2::Error>
+        where
+            D2: serde::Deserializer<'de>,
+        {
+            deserializer.deserialize_any(NumberVisitor)
+        }
+
+        fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            let number = value.trim().strip_suffix('%').unwrap_or(value.trim());
+            match number.parse::<f64>() {
+                Ok(number) if number.is_finite() => Ok(Some(number)),
+                _ => Err(E::invalid_value(serde::de::Unexpected::Str(value), &self)),
+            }
+        }
+
+        fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(Some(value as f64))
+        }
+
+        fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(Some(value as f64))
+        }
+
+        fn visit_f64<E>(self, value: f64) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            if value.is_finite() {
+                Ok(Some(value))
+            } else {
+                Err(E::invalid_value(serde::de::Unexpected::Float(value), &self))
+            }
+        }
+    }
+
+    deserializer.deserialize_any(NumberVisitor)
+}
+
 /// Canonical track weight: `3`, `"3"`, and `3.0` all print as `3`, while a
 /// finer split keeps its decimals — `minmax(0, 3fr)` / `minmax(0, 0.7fr)`.
 fn weight_text(value: f64) -> String {
@@ -265,7 +343,9 @@ where
 /// emphasizes is data on the *variant* (`emph`), not a style on the node — so
 /// two candidates that differ only in "where the accent lands" differ by one
 /// list, not by two whole trees.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// `PartialEq` only — bar magnitudes are `f64` (see [`BarItem`]).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum MockNode {
     /// A framed panel with a title bar (browser chrome, dashboard header).
@@ -543,12 +623,18 @@ pub enum VizKind {
     Area,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BarItem {
     pub label: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub value: Option<u32>,
+    /// Relative magnitude — the renderer divides by the largest value, so only
+    /// ordering matters. Deserialized wide on purpose, see [`de_opt_number`].
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "de_opt_number"
+    )]
+    pub value: Option<f64>,
 }
 
 /// One line of [`MockNode::Tree`]. `depth` is nesting level, not style.
@@ -562,7 +648,7 @@ pub struct TreeItem {
 
 /// One candidate. `id` aligns with an `options[].id` so the host can render the
 /// card's label/note from the envelope instead of the model retyping them.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Variant {
     pub id: String,
@@ -582,7 +668,7 @@ pub struct Variant {
 }
 
 /// The whole structured screen. Replaces `body_html` when present.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ScreenSpec {
     pub fidelity: Fidelity,
@@ -1208,6 +1294,7 @@ fn validate_node(node: &MockNode, path: &str, count: &mut usize) -> Result<(), S
             }
             for (index, item) in items.iter().enumerate() {
                 check_copy(&item.label, &format!("{path}.items[{index}].label"))?;
+                check_bar_value(item.value, &format!("{path}.items[{index}].value"))?;
             }
         }
         MockNode::Area { label, .. } | MockNode::Viz { label, .. } => {
@@ -1425,6 +1512,18 @@ fn check_proportion(value: Option<&str>, field: &str) -> Result<(), SpecError> {
         ));
     }
     Ok(())
+}
+
+/// A bar magnitude: any finite number, zero allowed (a real zero bar).
+/// Relative only — the renderer divides by the max — so there is no cap,
+/// just nothing negative or non-finite.
+fn check_bar_value(value: Option<f64>, field: &str) -> Result<(), SpecError> {
+    match value {
+        Some(value) if !value.is_finite() || value < 0.0 => {
+            Err(invalid(field, "must be a non-negative number"))
+        }
+        _ => Ok(()),
+    }
 }
 
 /// A color token: `#rgb` / `#rrggbb` / `#rrggbbaa`, or a CSS `rgb()/rgba()/hsl()/hsla()`

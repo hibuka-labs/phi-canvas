@@ -68,7 +68,9 @@ pub struct Reference {
 pub const MAX_REFERENCE_SRC_BYTES: usize = 1024 * 1024;
 
 /// Everything a screen needs besides its body.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// `PartialEq` only — an optional [`ScreenSpec`] carries `f64` bar magnitudes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ScreenEnvelope {
     pub title: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]

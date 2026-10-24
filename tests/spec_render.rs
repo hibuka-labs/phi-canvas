@@ -905,3 +905,34 @@ fn the_two_faces_never_leak_into_each_other() {
     );
     assert!(phone.contains("m-kpi"), "{phone}");
 }
+
+#[test]
+fn bar_magnitudes_arrive_as_decimals_and_leave_as_percent_numbers() {
+    let html = render_spec(
+        &parse(json!({
+            "fidelity": "wireframe",
+            "mock": {
+                "kind": "bars",
+                "items": [
+                    { "label": "甲", "value": 3.5 },
+                    { "label": "乙", "value": "4.2" },
+                    { "label": "丙", "value": "42%" }
+                ]
+            }
+        })),
+        &[],
+    );
+    // 3.5/42 ≈ 8%, "4.2"/42 = 10%, "42%" reads as 42 — the max, full width.
+    assert!(html.contains("--w:8\""), "{html}");
+    assert!(html.contains("--w:10\""), "{html}");
+    assert!(html.contains("--w:100\""), "{html}");
+
+    // The contract behind those numbers: `--w` is a unitless percent and the
+    // stylesheet scales it. A plain `width: var(--w, 100%)` made `--w:100` an
+    // invalid width — the biggest bar drew nothing while a valueless row took
+    // the whole track.
+    assert!(
+        phi_canvas::assets::COMPONENTS_CSS.contains("calc(var(--w"),
+        "components.css must read --w as a percent number"
+    );
+}

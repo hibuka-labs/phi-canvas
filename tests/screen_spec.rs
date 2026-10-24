@@ -689,3 +689,29 @@ fn a_node_in_a_string_items_slot_says_where_it_belongs() {
     assert!(msg.contains("label strings"), "{msg}");
     assert!(msg.contains("cols"), "{msg}");
 }
+
+#[test]
+fn bar_values_take_decimals_strings_and_percents() {
+    for value in [json!(3.5), json!("3.5"), json!("42%"), json!(42), json!(0)] {
+        parse(json!({
+            "fidelity": "wireframe",
+            "mock": { "kind": "bars", "items": [{ "label": "甲", "value": value }] }
+        }))
+        .expect("a bar magnitude is a number however it is written");
+    }
+
+    let err = parse(json!({
+        "fidelity": "wireframe",
+        "mock": { "kind": "bars", "items": [{ "label": "甲", "value": "abc" }] }
+    }))
+    .expect_err("a word is not a magnitude");
+    assert!(format!("{err}").contains("value"), "{err}");
+
+    let err = parse(json!({
+        "fidelity": "wireframe",
+        "mock": { "kind": "bars", "items": [{ "label": "甲", "value": -2 }] }
+    }))
+    .expect_err("a ranking bar cannot grow leftwards");
+    assert!(format!("{err}").contains("value"), "{err}");
+    assert!(format!("{err}").contains("non-negative"), "{err}");
+}

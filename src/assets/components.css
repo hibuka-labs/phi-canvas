@@ -847,7 +847,12 @@ body {
   content: "";
   position: absolute;
   inset: 0 auto 0 0;
-  width: var(--w, 100%);
+  /* `--w` is a percent number (0-100): the renderer's share maths is
+   * unitless, so the unit is this stylesheet's job — `calc(var(--w, 0) * 1%)`.
+   * A plain `width: var(--w, 100%)` made `--w:100` an invalid width and the
+   * biggest bar drew nothing. No value (no `--w`) draws no fill — the same
+   * zero the antd face gives an unscored row. */
+  width: calc(var(--w, 0) * 1%);
   background: color-mix(in srgb, var(--m-accent, var(--accent)) 68%, transparent);
 }
 .m-bar span {
