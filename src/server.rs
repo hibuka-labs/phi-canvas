@@ -79,6 +79,9 @@ pub struct PushReceipt {
     pub title: String,
     pub option_count: usize,
     pub display_only: bool,
+    /// Host-set pause marker (`ScreenEnvelope::interstitial`) — the receipt
+    /// carries it so a replayed history still names its pauses.
+    pub interstitial: bool,
 }
 
 #[derive(Debug, Error)]
@@ -306,6 +309,7 @@ impl Canvas {
                 title: env.title.clone(),
                 option_count: env.options.len(),
                 display_only: env.is_display_only(),
+                interstitial: env.interstitial,
             })
             .collect()
     }
@@ -326,6 +330,7 @@ impl Canvas {
                 title: env.title.clone(),
                 option_count: env.options.len(),
                 display_only: env.is_display_only(),
+                interstitial: env.interstitial,
             };
             state.screens.insert(seq, env);
             state.current = Some(seq);

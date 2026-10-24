@@ -119,7 +119,7 @@ pub fn render_screen(
         None => String::new(),
     };
     let indicator = if !live {
-        "查看中 · 选择请回到当前屏".to_string()
+        "查看中 · <a href=\"/\">选择请回到当前屏</a>".to_string()
     } else if env.is_display_only() {
         "展示中 · 回到终端继续讨论".to_string()
     } else if env.multiselect {
@@ -170,10 +170,12 @@ pub fn render_screen(
 }
 
 /// The version rail: every design screen so far, this one marked, plus the way
-/// into the compare view. Hidden until there is more than one version — the
-/// rail is history, and history of one is just the present.
+/// into the compare view. Hidden while the design on display *is* the present —
+/// but a pause (or any other look) with one design version behind it is already
+/// history, and history the user cannot reach is a dead end. The compare link
+/// needs two versions; a lone chip is still the way back.
 fn render_versions(versions: &[VersionEntry], current: u64) -> String {
-    if versions.len() < 2 {
+    if !versions.iter().any(|version| version.seq != current) {
         return String::new();
     }
     let mut chips = String::new();
@@ -190,16 +192,22 @@ fn render_versions(versions: &[VersionEntry], current: u64) -> String {
             title = escape_html(&version.title),
         ));
     }
-    let (before, after) = default_compare_pair(versions, current);
+    let compare = if versions.len() >= 2 {
+        let (before, after) = default_compare_pair(versions, current);
+        format!(
+            r#"<a class="versions-compare" href="/compare/{before}/{after}">对比</a>"#,
+            before = before,
+            after = after,
+        )
+    } else {
+        String::new()
+    };
     format!(
         r#"<nav class="versions" aria-label="版本">
   <span class="versions-label">版本</span>
   {chips}
-  <a class="versions-compare" href="/compare/{before}/{after}">对比</a>
-</nav>"#,
-        chips = chips,
-        before = before,
-        after = after,
+  {compare}
+</nav>"#
     )
 }
 

@@ -117,6 +117,58 @@ async fn a_single_version_has_no_rail() {
 }
 
 #[tokio::test]
+async fn the_rail_offers_the_way_back_when_the_pause_is_current() {
+    // The pause screen (host waiting push at turn end) supersedes the design
+    // before the user ever looks. Then one design version is history, not the
+    // present — and the pause must still lead back to it.
+    let tmp = tempfile::tempdir().unwrap();
+    let canvas = open_canvas(&tmp).await;
+    canvas
+        .push(screen("v1 · 侧边栏", "<p>one</p>"))
+        .await
+        .unwrap();
+    canvas.push(waiting()).await.unwrap();
+
+    let (status, response) = send(canvas.port(), &get(canvas.port(), "/")).await;
+    assert_eq!(status, 200);
+    let body = body_of(&response);
+
+    assert!(
+        body.contains(r#"href="/screens/1""#),
+        "the pause must offer the way back to the design: {body}"
+    );
+    assert!(
+        !body.contains("/compare/"),
+        "one version is not a compare pair"
+    );
+
+    canvas.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_look_back_screen_links_forward_to_the_live_one() {
+    let tmp = tempfile::tempdir().unwrap();
+    let canvas = open_canvas(&tmp).await;
+    canvas
+        .push(screen("v1 · 侧边栏", "<p>one</p>"))
+        .await
+        .unwrap();
+    canvas.push(waiting()).await.unwrap();
+
+    let (status, response) = send(canvas.port(), &get(canvas.port(), "/screens/1")).await;
+    assert_eq!(status, 200);
+    let body = body_of(&response);
+
+    assert!(body.contains("查看中"), "it is a look back: {body}");
+    assert!(
+        body.contains(r#"href="/""#),
+        "and it links forward to the screen on offer: {body}"
+    );
+
+    canvas.shutdown().await;
+}
+
+#[tokio::test]
 async fn interstitial_screens_stay_out_of_the_history() {
     let tmp = tempfile::tempdir().unwrap();
     let canvas = open_canvas(&tmp).await;
@@ -143,6 +195,44 @@ async fn interstitial_screens_stay_out_of_the_history() {
     );
 
     canvas.shutdown().await;
+}
+
+// ── the launch target (what "come look at the design" lands on) ─────────────
+
+#[tokio::test]
+async fn push_receipts_name_the_pauses() {
+    // The host decides what "come look at the design" lands on — it can only
+    // do that if a receipt says which pushes are pauses.
+    let tmp = tempfile::tempdir().unwrap();
+    let canvas = open_canvas(&tmp).await;
+
+    let design = canvas.push(screen("v1", "<p>one</p>")).await.unwrap();
+    assert!(!design.interstitial, "a design push is a version");
+
+    let pause = canvas.push(waiting()).await.unwrap();
+    assert!(pause.interstitial, "the pause says so on its receipt");
+
+    canvas.shutdown().await;
+}
+
+#[tokio::test]
+async fn replayed_receipts_still_name_the_pauses() {
+    // The recovery path opens a fresh server over the same store and replays
+    // `pushed_screens` into the host's bookkeeping — the pause distinction has
+    // to survive that, or the relaunch target lands back on the pause.
+    let tmp = tempfile::tempdir().unwrap();
+    let canvas = open_canvas(&tmp).await;
+    canvas.push(screen("v1", "<p>one</p>")).await.unwrap();
+    canvas.push(waiting()).await.unwrap();
+    canvas.shutdown().await;
+
+    let rebound = open_canvas(&tmp).await;
+    let receipts = rebound.pushed_screens();
+    assert_eq!(receipts.len(), 2, "history is recovered: {receipts:?}");
+    assert!(!receipts[0].interstitial, "the design");
+    assert!(receipts[1].interstitial, "and the pause");
+
+    rebound.shutdown().await;
 }
 
 // ── the compare view (并排 / 滑块) ─────────────────────────────────────────
