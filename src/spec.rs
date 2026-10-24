@@ -628,7 +628,7 @@ pub enum VizKind {
 pub struct BarItem {
     pub label: String,
     /// Relative magnitude — the renderer divides by the largest value, so only
-    /// ordering matters. Deserialized wide on purpose, see [`de_opt_number`].
+    /// ordering matters. Deserialized wide on purpose, see `de_opt_number`.
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
