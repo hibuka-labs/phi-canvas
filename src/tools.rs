@@ -111,8 +111,8 @@ impl CanvasTools {
         }
     }
 
-    /// Wire the host's launch/consent seam. Without it, open reports
-    /// `awaiting consent` and never touches a browser.
+    /// Wire the host's launch/consent seam. Without it, open reports the
+    /// unanswered wait and never touches a browser.
     pub fn with_launcher(mut self, launcher: Arc<dyn BrowserLauncher>) -> Self {
         self.launcher = Some(launcher);
         self
@@ -233,12 +233,20 @@ fn is_live(canvas: &Canvas) -> bool {
 }
 
 /// Locked `canvas_open` texts (M3).
+///
+/// The awaiting-consent line is what the *model* acts on, so it must not read
+/// as a task. "Awaiting consent" alone sent a live model hunting for a consent
+/// control on the page (it clicked a phantom `button.btn-allow`); the text now
+/// names who is holding things up (the user), where they answer (the terminal
+/// key), and that the page has nothing to click — so there is nothing for the
+/// model to do.
 pub fn text_open(url: &str, decision: LaunchDecision) -> String {
     match decision {
         LaunchDecision::Launched => format!("canvas: {url} | state: open | browser launched"),
-        LaunchDecision::AwaitingConsent => {
-            format!("canvas: {url} | state: open | awaiting consent")
-        }
+        LaunchDecision::AwaitingConsent => format!(
+            "canvas: {url} | state: open | awaiting the user's keypress in the terminal — \
+             there is no button on the page and nothing for you to do"
+        ),
     }
 }
 
@@ -259,8 +267,11 @@ pub fn tool_descriptors() -> Vec<ToolDescriptor> {
             name: TOOL_OPEN,
             description: "Open the design canvas in the user's browser. Use when the next \
                 question is visual (layout, styling, comparison) and a picture would be \
-                clearer than words. Requires the user's consent before a browser appears; \
-                the return text says whether it launched or is still awaiting consent. \
+                clearer than words. Launching waits on the user, who answers with a \
+                keypress in the terminal — never a control on the page. The return text \
+                reports which of the two happened; when it says the user has not answered \
+                yet, that is the end of your part: do not look for, click or approve \
+                anything on the page, and do not call this again to force it. \
                 Idempotent while the canvas is open — calling it again returns the same URL.",
             schema: serde_json::json!({
                 "type": "object",

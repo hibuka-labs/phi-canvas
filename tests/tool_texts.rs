@@ -62,6 +62,22 @@ fn push_args() -> serde_json::Value {
     })
 }
 
+#[test]
+fn the_open_descriptor_places_the_consent_key_in_the_terminal() {
+    // Live-model lesson: "y opens it in your browser" sent a model hunting for
+    // a consent button on the page (it clicked a phantom one). The consent is
+    // a key in the terminal — name where the key lives.
+    let open = tool_descriptors()
+        .into_iter()
+        .find(|descriptor| descriptor.name == "canvas_open")
+        .expect("canvas_open is described");
+    assert!(
+        open.description.contains("terminal"),
+        "the consent key's place is named: {}",
+        open.description
+    );
+}
+
 #[tokio::test]
 async fn open_without_launcher_awaits_consent() {
     let (_tmp, tools) = tools();
@@ -70,7 +86,36 @@ async fn open_without_launcher_awaits_consent() {
     let port = tools.canvas().await.expect("canvas bound").port();
     assert_eq!(
         text,
-        format!("canvas: http://127.0.0.1:{port} | state: open | awaiting consent")
+        format!(
+            "canvas: http://127.0.0.1:{port} | state: open | awaiting the user's \
+             keypress in the terminal — there is no button on the page and nothing \
+             for you to do"
+        )
+    );
+}
+
+#[tokio::test]
+async fn the_awaiting_text_says_nothing_is_the_models_job() {
+    // Regression on a live-model failure: a bare "awaiting consent" read as a
+    // task, and the model went looking for a consent control on the page and
+    // clicked a phantom `button.btn-allow`. The text is the model's only
+    // signal here, so it has to name who is waiting (the user), where they
+    // answer (the terminal), that the page has no control, and that the model
+    // itself is done.
+    let (_tmp, tools) = tools();
+    let text = tools.open().await.unwrap();
+
+    for (needle, why) in [
+        ("the user's keypress", "who is holding things up"),
+        ("terminal", "where the answer happens"),
+        ("no button on the page", "there is nothing on the page to find"),
+        ("nothing for you to do", "the model is explicitly finished"),
+    ] {
+        assert!(text.contains(needle), "{why} — missing {needle:?} in: {text}");
+    }
+    assert!(
+        !text.contains("awaiting consent"),
+        "the bare phrase is what read as a task: {text}"
     );
 }
 
@@ -299,11 +344,14 @@ async fn rebind_never_consults_the_launcher() {
 async fn launch_decision_can_be_settled_after_the_fact() {
     // The consent answer arrives asynchronously (the user presses y on a
     // popup), so the host reports the outcome back — later `canvas_open`
-    // calls on the same live canvas must not claim "awaiting consent" after
-    // a browser is already open.
+    // calls on the same live canvas must not still say the user has not
+    // answered after a browser is already open.
     let (_tmp, tools, _spy) = tools_with_spy(LaunchDecision::AwaitingConsent);
     let text = tools.open().await.unwrap();
-    assert!(text.ends_with("awaiting consent"));
+    assert!(
+        text.contains("keypress in the terminal"),
+        "unanswered still reports the wait: {text}"
+    );
 
     tools.set_launch_decision(LaunchDecision::Launched).await;
     let text = tools.open().await.unwrap();
