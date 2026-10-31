@@ -108,10 +108,16 @@ async fn the_awaiting_text_says_nothing_is_the_models_job() {
     for (needle, why) in [
         ("the user's keypress", "who is holding things up"),
         ("terminal", "where the answer happens"),
-        ("no button on the page", "there is nothing on the page to find"),
+        (
+            "no button on the page",
+            "there is nothing on the page to find",
+        ),
         ("nothing for you to do", "the model is explicitly finished"),
     ] {
-        assert!(text.contains(needle), "{why} — missing {needle:?} in: {text}");
+        assert!(
+            text.contains(needle),
+            "{why} — missing {needle:?} in: {text}"
+        );
     }
     assert!(
         !text.contains("awaiting consent"),

@@ -1,6 +1,6 @@
 [package]
 name = "phi-canvas"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "Design canvas server for the phi family — local visual companion: screens, options, selection events"
 license = "MIT"
