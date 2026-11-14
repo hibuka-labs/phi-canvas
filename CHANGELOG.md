@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-11-14
+
+### Changed
+- **The spec and the spec renderer moved into modules** (`spec/`,
+  `spec_render/`). Internal reorganization only — no API change, no behavior
+  change.
+
 ## [0.1.0] - 2026-10-24
 
 Initial release (MIT). Design canvas server for the phi family — the local
