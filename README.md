@@ -92,4 +92,4 @@ cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
 cargo run --example demo   # pushes three screens and opens the page
 ```
 
-License: MIT
+License: MIT OR Apache-2.0 — see [LICENSE-MIT](LICENSE-MIT) and [LICENSE-APACHE](LICENSE-APACHE).
